@@ -35,6 +35,15 @@ class Make_promo(StatesGroup):
     views_confirm = State()
 
 
+class Make_search_request(StatesGroup):
+    keyword = State()
+    view = State()
+
+
+class My_ads(StatesGroup):
+    view = State()
+
+
 
 def inline_keyboard(buttons_set, back_data=None):
     key = types.InlineKeyboardMarkup()
@@ -190,11 +199,11 @@ async def send_promo(callback_query, promo, edit=True, single=False):
 
 
 async def watch_proms(callback_query, state, arrow=None):
-    conn = mysql.connector.connect(host=c.host, user=c.user, passwd=c.password, database=c.db)
-    cursor = conn.cursor(buffered=True)
     selectLastTimeQuery = "SELECT last_time FROM promo_time WHERE user_id=(%s)"
     selectPromsQuery = "SELECT ID, text, photo, video FROM promo"
     selectViewedQuery = "SELECT promo_id FROM promo_viewed WHERE user_id=(%s)"
+    conn = mysql.connector.connect(host=c.host, user=c.user, passwd=c.password, database=c.db)
+    cursor = conn.cursor(buffered=True)
     cursor.execute(selectLastTimeQuery, [callback_query.message.chat.id])
     last_time = cursor.fetchone()
     if last_time:
@@ -212,7 +221,7 @@ async def watch_proms(callback_query, state, arrow=None):
     conn.close()
 
     if viewed and promos:
-        viewed = [x[0] for x in viewed]
+        viewed = {x[0] for x in viewed}
         promos = [x for x in promos if x[0] not in viewed]
     if not promos:
         await state.finish()
@@ -252,9 +261,109 @@ async def make_promo(callback_query):
     await callback_query.message.answer("Отправьте/перешлите фото или видео с подписью")
 
 
-async def search_make_request(callback_query): ...
-async def my_obs_see(callback_query): ...
-async def my_ads(callback_query): ...
+async def search_choose_option(callback_query):
+    await callback_query.message.answer("Выберите действие:", reply_markup=inline_keyboard(buttons_cortege(Buttons.search_request), Buttons.back.data))
+    try: await bot.delete_message(callback_query.message.chat.id, callback_query.message.message_id)
+    except utils.exceptions.MessageCantBeDeleted: pass
+
+
+async def search_my_requests(callback_query):
+    conn = mysql.connector.connect(host=c.host, user=c.user, passwd=c.password, database=c.db)
+    cursor = conn.cursor(buffered=True)
+    selectQuery = "SELECT keyword, created FROM search_requests WHERE user_id=(%s)"
+    cursor.execute(selectQuery, [callback_query.message.chat.id])
+    result = cursor.fetchall()
+    conn.close()
+    if not result:
+        await callback_query.answer("У вас нет ни одного запроса!")
+        return
+    text = ''
+    for req in result:
+        text += f"Запрос по фразе: {req[0]}\n" \
+                f"Создан: {datetime.datetime.strftime(req[1], '%d.%m.%Y')}\n" \
+                f"Активен до: {datetime.datetime.strftime(req[1] + datetime.timedelta(30), '%d.%m.%Y')}\n\n"
+    key = types.InlineKeyboardMarkup()
+    key.add(types.InlineKeyboardButton(Buttons.back.title, callback_data=Buttons.back.data))
+    await callback_query.message.answer(text, reply_markup=key)
+    try: await bot.delete_message(callback_query.message.chat.id, callback_query.message.message_id)
+    except utils.exceptions.MessageCantBeDeleted: pass
+
+
+async def search_make_requests(callback_query):
+    await Make_search_request.keyword.set()
+    await callback_query.message.answer("Пожалуйста, введите ключевую фразу")
+    try: await bot.delete_message(callback_query.message.chat.id, callback_query.message.message_id)
+    except utils.exceptions.MessageCantBeDeleted: pass
+
+
+async def my_ads(callback_query, state):
+    data = await state.get_data()
+    last_index = data.get('ad_index')
+    conn = mysql.connector.connect(host=c.host, user=c.user, passwd=c.password, database=c.db)
+    cursor = conn.cursor(buffered=True)
+    selectQuery = "SELECT channel, message_id, ID, created, period FROM ads WHERE user_id=(%s)"
+    selectChannelQuery = "SELECT username, name FROM channels WHERE ID=(%s)"
+    cursor.execute(selectQuery, [callback_query.message.chat.id])
+    result = cursor.fetchall()
+    conn.close()
+    if not result:
+        await callback_query.answer("У вас нет ни одного объявления!")
+        return
+    key = types.InlineKeyboardMarkup()
+    but_1 = types.InlineKeyboardButton(Buttons.arrows[0].title, callback_data=Buttons.arrows[0].data)
+    but_2 = types.InlineKeyboardButton(Buttons.arrows[1].title, callback_data=Buttons.arrows[1].data)
+    key.add(but_1, but_2)
+    key.add(types.InlineKeyboardButton(Buttons.delete_ad.title, callback_data=Buttons.delete_ad.data))
+    key.add(types.InlineKeyboardButton(Buttons.back.title, callback_data=Buttons.back.data))
+
+    new_index = 0
+    if last_index is not None:
+        length = len(result)
+        if callback_query.data == Buttons.arrows[0].data:
+            if last_index == 0 or last_index > length - 1:
+                new_index = -1
+            else:
+                new_index = last_index - 1
+        else:
+            if last_index >= length - 1:
+                new_index = 0
+            else:
+                new_index = last_index + 1
+    else:
+        await My_ads.view.set()
+
+    conn = mysql.connector.connect(host=c.host, user=c.user, passwd=c.password, database=c.db)
+    cursor = conn.cursor(buffered=True)
+    try:
+        cursor.execute(selectChannelQuery, [result[new_index][0]])
+    except IndexError:
+        conn.close()
+        await callback_query.answer("Не нажимайте так часто!", show_alert=True)
+        return
+    channel = cursor.fetchone()
+    conn.close()
+
+    await state.update_data({'ad_index': new_index, 'ad_id': result[new_index][2]})
+    await bot.forward_message(callback_query.message.chat.id, f'@{channel[0]}', result[new_index][1])
+    await callback_query.message.answer(
+        f"Объявление №{result[new_index][2]}\n"
+        f"Канал: {channel[1]} (@{channel[0]})\n"
+        f"Создано: {datetime.datetime.strftime(result[new_index][3], '%d.%m.%Y')}\n"
+        f"Длительность: {result[new_index][4]} дней\n"
+        f"Активно до: {datetime.datetime.strftime(result[new_index][3] + datetime.timedelta(result[new_index][4]), '%d.%m.%Y')}",
+        reply_markup=key)
+
+    try:
+        last_message_id = callback_query.message.message_id
+        await bot.delete_message(callback_query.message.chat.id, last_message_id)
+        await bot.delete_message(callback_query.message.chat.id, last_message_id - 1)
+    except utils.exceptions.MessageCantBeDeleted: pass
+    except utils.exceptions.MessageToDeleteNotFound: await callback_query.answer("Не нажимайте так часто!", show_alert=True)
+
+
+
+
+async def my_promos(callback_query): ...
 async def referrals(callback_query): ...
 async def top_up_balance(callback_query): ...
 
@@ -267,11 +376,11 @@ async def callback_inline(callback_query: types.CallbackQuery, state: FSMContext
     elif callback_query.data == Buttons.main[1].data:
         await proms_choose_mode(callback_query)
     elif callback_query.data == Buttons.main[2].data:
-        await search_make_request(callback_query)
+        await search_choose_option(callback_query)
     elif callback_query.data == Buttons.main[3].data:
-        await my_obs_see(callback_query)
+        await my_ads(callback_query, state)
     elif callback_query.data == Buttons.main[4].data:
-        await my_ads(callback_query)
+        await my_promos(callback_query)
     elif callback_query.data == Buttons.main[5].data:
         await referrals(callback_query)
     elif callback_query.data == Buttons.main[6].data:
@@ -287,13 +396,18 @@ async def callback_inline(callback_query: types.CallbackQuery, state: FSMContext
     elif callback_query.data == Buttons.make_promo[1].data:
         await make_promo(callback_query)
 
+    elif callback_query.data == Buttons.search_request[0].data:
+        await search_my_requests(callback_query)
+    elif callback_query.data == Buttons.search_request[1].data:
+        await search_make_requests(callback_query)
+
 
 
 async def channels_choose(callback_query, state):
-    conn = mysql.connector.connect(host=c.host, user=c.user, passwd=c.password, database=c.db)
-    cursor = conn.cursor(buffered=True)
     selectQuery = "SELECT name, username FROM channels WHERE ID=(%s)"
     countQuery = "SELECT COUNT(ID) FROM ads WHERE channel=(%s)"
+    conn = mysql.connector.connect(host=c.host, user=c.user, passwd=c.password, database=c.db)
+    cursor = conn.cursor(buffered=True)
     cursor.execute(selectQuery, [callback_query.data])
     result = cursor.fetchone()
     cursor.execute(countQuery, [callback_query.data])
@@ -378,7 +492,13 @@ async def period_and_confirm(message, state, period=None, price=None, callback_q
         else:
             await bot.send_message(message.chat.id, text + "\n\n❗ Медиа файлы отсутствуют ❗", reply_markup=key)
     else:
-        await bot.edit_message_caption(message.chat.id, message.message_id, caption=text, reply_markup=key)
+        try:
+            if data['media']['photo'] or data['media']['video']:
+                await bot.edit_message_caption(message.chat.id, message.message_id, caption=text, reply_markup=key)
+            else:
+                await bot.edit_message_text(text, message.chat.id, message.message_id, reply_markup=key)
+        except utils.exceptions.MessageNotModified: pass
+        except utils.exceptions.BadRequest: await callback_query.answer("Не нажимайте так часто!", show_alert=True)
 
 
 @dp.message_handler(content_types=['text', 'photo', 'video'], state=Channels.media_text)
@@ -407,12 +527,12 @@ async def media_text(message: types.Message, state: FSMContext):
 
 async def publish_to_channel(callback_query, state):
     data = await state.get_data()
-    conn = mysql.connector.connect(host=c.host, user=c.user, passwd=c.password, database=c.db)
-    cursor = conn.cursor(buffered=True)
     selectBalanceQuery = "SELECT balance FROM users WHERE user_id=(%s)"
     selectChannelQuery = "SELECT username FROM channels WHERE ID=(%s)"
     insertQuery = "INSERT INTO ads (user_id, channel, message_id, text, photos, videos, period) VALUES (%s, %s, %s, %s, %s, %s, %s)"
     updateQuery = "UPDATE users SET balance=(%s) WHERE user_id=(%s)"
+    conn = mysql.connector.connect(host=c.host, user=c.user, passwd=c.password, database=c.db)
+    cursor = conn.cursor(buffered=True)
     cursor.execute(selectBalanceQuery, [callback_query.message.chat.id])
     balance = cursor.fetchone()[0]
     cursor.execute(selectChannelQuery, [data['channel']['ID']])
@@ -435,9 +555,10 @@ async def publish_to_channel(callback_query, state):
 
     conn = mysql.connector.connect(host=c.host, user=c.user, passwd=c.password, database=c.db)
     cursor = conn.cursor(buffered=True)
+    photo = str(data['media']['photo']) if data['media']['photo'] else None
+    video = str(data['media']['video']) if data['media']['video'] else None
     cursor.executemany(insertQuery, [(callback_query.message.chat.id, data['channel']['ID'], m.message_id,
-                                      data['media']['caption'], str(data['media']['photo']),
-                                      str(data['media']['video']), data['period'])])
+                                      data['media']['caption'], photo, video, data['period'])])
     cursor.executemany(updateQuery, [(balance - data['price'], callback_query.message.chat.id)])
     conn.commit()
     conn.close()
@@ -548,11 +669,11 @@ async def media_text(message: types.Message, state: FSMContext):
 
 async def publish_ad(callback_query, state):
     data = await state.get_data()
-    conn = mysql.connector.connect(host=c.host, user=c.user, passwd=c.password, database=c.db)
-    cursor = conn.cursor(buffered=True)
     selectBalanceQuery = "SELECT balance FROM users WHERE user_id=(%s)"
     insertQuery = "INSERT INTO promo (user_id, text, photo, video, required_views) VALUES (%s, %s, %s, %s, %s)"
     updateQuery = "UPDATE users SET balance=(%s) WHERE user_id=(%s)"
+    conn = mysql.connector.connect(host=c.host, user=c.user, passwd=c.password, database=c.db)
+    cursor = conn.cursor(buffered=True)
     cursor.execute(selectBalanceQuery, [callback_query.message.chat.id])
     balance = cursor.fetchone()[0]
     conn.close()
@@ -587,6 +708,163 @@ async def callback_inline(callback_query: types.CallbackQuery, state: FSMContext
     elif callback_query.data == Buttons.make_ad[0].data:
         await publish_ad(callback_query, state)
 
+
+@dp.message_handler(content_types=['text'], state=Make_search_request.keyword)
+async def search(message: types.Message, state: FSMContext):
+    keyword = message.text
+    if len(keyword) > 40:
+        await message.reply("Слишком длинная фраза, разрешено не более 40 символов")
+        return
+    conn = mysql.connector.connect(host=c.host, user=c.user, passwd=c.password, database=c.db)
+    cursor = conn.cursor(buffered=True)
+    searchQuery = f"SELECT channel, message_id FROM ads WHERE text LIKE '%{keyword}%'"
+    selectChannelQuery = "SELECT username FROM channels WHERE ID=(%s)"
+    cursor.execute(searchQuery)
+    result = cursor.fetchall()
+    if result:
+        cursor.execute(selectChannelQuery, [result[0][0]])
+        channel = cursor.fetchone()[0]
+        conn.close()
+    else:
+        conn.close()
+        await state.finish()
+        await message.reply(f"По запросу «{keyword}» ничего не найдено")
+        await main_menu(message.chat.id, message.chat.first_name)
+        return
+    await state.update_data({'keyword': keyword, 'ad_index': 0})
+    await Make_search_request.next()
+    key = types.InlineKeyboardMarkup()
+    but_1 = types.InlineKeyboardButton(Buttons.arrows[0].title, callback_data=Buttons.arrows[0].data)
+    but_2 = types.InlineKeyboardButton(Buttons.arrows[1].title, callback_data=Buttons.arrows[1].data)
+    key.add(but_1, but_2)
+    key.add(types.InlineKeyboardButton(Buttons.on_notifications.title, callback_data=Buttons.on_notifications.data))
+    key.add(types.InlineKeyboardButton(Buttons.back.title, callback_data=Buttons.back.data))
+
+    await bot.forward_message(message.chat.id, f'@{channel}', result[0][1])
+    await message.answer("Выберите действие", reply_markup=key)
+
+
+@dp.callback_query_handler(lambda callback_query: True, state=Make_search_request.view)
+async def callback_inline(callback_query: types.CallbackQuery, state: FSMContext):
+    if await _back(callback_query, state, search_choose_option, callback_query):
+        return
+    data = await state.get_data()
+    if callback_query.data == Buttons.arrows[0].data or callback_query.data == Buttons.arrows[1].data:
+        last_index = data['ad_index']
+        keyword = data['keyword']
+        conn = mysql.connector.connect(host=c.host, user=c.user, passwd=c.password, database=c.db)
+        cursor = conn.cursor(buffered=True)
+        searchQuery = f"SELECT channel, message_id FROM ads WHERE text LIKE '%{keyword}%'"
+        selectChannelQuery = "SELECT username FROM channels WHERE ID=(%s)"
+        cursor.execute(searchQuery)
+        result = cursor.fetchall()
+        conn.close()
+        key = types.InlineKeyboardMarkup()
+        but_1 = types.InlineKeyboardButton(Buttons.arrows[0].title, callback_data=Buttons.arrows[0].data)
+        but_2 = types.InlineKeyboardButton(Buttons.arrows[1].title, callback_data=Buttons.arrows[1].data)
+        key.add(but_1, but_2)
+        key.add(types.InlineKeyboardButton(Buttons.on_notifications.title, callback_data=Buttons.on_notifications.data))
+        key.add(types.InlineKeyboardButton(Buttons.back.title, callback_data=Buttons.back.data))
+
+        length = len(result)
+        if callback_query.data == Buttons.arrows[0].data:
+            if last_index == 0 or last_index > length - 1:
+                new_index = -1
+            else:
+                new_index = last_index - 1
+        else:
+            if last_index >= length - 1:
+                new_index = 0
+            else:
+                new_index = last_index + 1
+
+        conn = mysql.connector.connect(host=c.host, user=c.user, passwd=c.password, database=c.db)
+        cursor = conn.cursor(buffered=True)
+        cursor.execute(selectChannelQuery, [result[new_index][0]])
+        channel = cursor.fetchone()[0]
+        conn.close()
+
+        await state.update_data({'ad_index': new_index})
+        await bot.forward_message(callback_query.message.chat.id, f'@{channel}', result[new_index][1])
+        await callback_query.message.answer("Выберите действие", reply_markup=key)
+
+        try:
+            last_message_id = callback_query.message.message_id
+            await bot.delete_message(callback_query.message.chat.id, last_message_id)
+            await bot.delete_message(callback_query.message.chat.id, last_message_id - 1)
+        except utils.exceptions.MessageCantBeDeleted: pass
+        except utils.exceptions.MessageToDeleteNotFound: await callback_query.answer("Не нажимайте так часто!", show_alert=True)
+
+    elif callback_query.data == Buttons.on_notifications.data:
+        with open('prices.json', 'r') as f:
+            price = json.load(f)['notify']
+        await callback_query.message.answer(f"Оповещения о новых объявлениях по фразе «{data['keyword']}» будут включены на 30 дней.\nСтоимость: {price} грн.",
+                                            reply_markup=inline_keyboard(Buttons.pay_confirm, Buttons.back.data))
+        try:
+            last_message_id = callback_query.message.message_id
+            await bot.delete_message(callback_query.message.chat.id, last_message_id)
+            await bot.delete_message(callback_query.message.chat.id, last_message_id - 1)
+        except utils.exceptions.MessageCantBeDeleted: pass
+        except utils.exceptions.MessageToDeleteNotFound: await callback_query.answer("Не нажимайте так часто!", show_alert=True)
+    elif callback_query.data == Buttons.pay_confirm.data:
+        with open('prices.json', 'r') as f:
+            price = json.load(f)['notify']
+        selectBalanceQuery = "SELECT balance FROM users WHERE user_id=(%s)"
+        updateBalanceQuery = "UPDATE users SET balance=(%s) WHERE user_id=(%s)"
+        insertQuery = "INSERT INTO search_requests (user_id, keyword) VALUES (%s, %s)"
+        conn = mysql.connector.connect(host=c.host, user=c.user, passwd=c.password, database=c.db)
+        cursor = conn.cursor(buffered=True)
+        cursor.execute(selectBalanceQuery, [callback_query.message.chat.id])
+        balance = cursor.fetchone()[0]
+        conn.close()
+        if balance < price:
+            await callback_query.answer(f"На вашем балансе недостаточно средств. Текущая сумма на балансе: {balance} грн.", show_alert=True)
+            return
+        conn = mysql.connector.connect(host=c.host, user=c.user, passwd=c.password, database=c.db)
+        cursor = conn.cursor(buffered=True)
+        cursor.executemany(insertQuery, [(callback_query.message.chat.id, data['keyword'])])
+        cursor.executemany(updateBalanceQuery, [(balance - price, callback_query.message.chat.id)])
+        conn.commit()
+        conn.close()
+        await state.finish()
+        await callback_query.message.answer(f"Оповещения по фразе «{data['keyword']}» подключены на 30 дней. Детальнее вы можете посмотреть в меню «Поиск - Мои запросы»",
+                                            reply_markup=inline_keyboard(Buttons.back_to_menu))
+        try: await bot.delete_message(callback_query.message.chat.id, callback_query.message.message_id)
+        except utils.exceptions.MessageCantBeDeleted: pass
+
+
+@dp.callback_query_handler(lambda callback_query: True, state=My_ads.view)
+async def callback_inline(callback_query: types.CallbackQuery, state: FSMContext):
+    if await _back(callback_query, state, main_menu, callback_query.message.chat.id, callback_query.message.chat.first_name, callback_query.message.message_id):
+        try: await bot.delete_message(callback_query.message.chat.id, callback_query.message.message_id - 1)
+        except utils.exceptions.MessageCantBeDeleted: pass
+        except utils.exceptions.MessageToDeleteNotFound: pass
+        return
+    if callback_query.data == Buttons.arrows[0].data or callback_query.data == Buttons.arrows[1].data:
+        await my_ads(callback_query, state)
+    elif callback_query.data == Buttons.delete_ad.data:
+        data = await state.get_data()
+        await callback_query.message.answer(f"Вы уверены что хотите удалить объявление №{data['ad_id']} ?\nДеньги за объявление не будут возвращены.",
+                                            reply_markup=inline_keyboard(buttons_cortege(Buttons.confirm_delete_ad)))
+        try:
+            last_message_id = callback_query.message.message_id
+            await bot.delete_message(callback_query.message.chat.id, last_message_id)
+            await bot.delete_message(callback_query.message.chat.id, last_message_id - 1)
+        except utils.exceptions.MessageCantBeDeleted: pass
+        except utils.exceptions.MessageToDeleteNotFound: pass
+    elif callback_query.data == Buttons.confirm_delete_ad[0].data:
+        data = await state.get_data()
+        conn = mysql.connector.connect(host=c.host, user=c.user, passwd=c.password, database=c.db)
+        cursor = conn.cursor(buffered=True)
+        deleteQuery = "DELETE FROM ads WHERE ID=(%s)"
+        cursor.execute(deleteQuery, [data['ad_id']])
+        conn.commit()
+        conn.close()
+        await callback_query.answer("Удалено!", show_alert=True)
+        await my_ads(callback_query, state)
+    elif callback_query.data == Buttons.confirm_delete_ad[1].data:
+        await callback_query.answer("Отменено")
+        await my_ads(callback_query, state)
 
 
 
