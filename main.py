@@ -44,6 +44,10 @@ class My_ads(StatesGroup):
     view = State()
 
 
+class My_promos(StatesGroup):
+    view = State()
+
+
 
 def inline_keyboard(buttons_set, back_data=None):
     key = types.InlineKeyboardMarkup()
@@ -361,10 +365,73 @@ async def my_ads(callback_query, state):
     except utils.exceptions.MessageToDeleteNotFound: await callback_query.answer("Не нажимайте так часто!", show_alert=True)
 
 
+async def my_promos(callback_query, state, edit=False):
+    data = await state.get_data()
+    last_index = data.get('promo_index')
+    conn = mysql.connector.connect(host=c.host, user=c.user, passwd=c.password, database=c.db)
+    cursor = conn.cursor(buffered=True)
+    selectQuery = "SELECT * FROM promo WHERE user_id=(%s)"
+    cursor.execute(selectQuery, [callback_query.message.chat.id])
+    result = cursor.fetchall()
+    conn.close()
+    if not result:
+        await callback_query.answer("У вас нет ни одной рекламы!")
+        return
+    key = types.InlineKeyboardMarkup()
+    but_1 = types.InlineKeyboardButton(Buttons.arrows[0].title, callback_data=Buttons.arrows[0].data)
+    but_2 = types.InlineKeyboardButton(Buttons.arrows[1].title, callback_data=Buttons.arrows[1].data)
+    key.add(but_1, but_2)
+    key.add(types.InlineKeyboardButton(Buttons.back.title, callback_data=Buttons.back.data))
+
+    new_index = 0
+    if last_index is not None:
+        length = len(result)
+        if callback_query.data == Buttons.arrows[0].data:
+            if last_index == 0 or last_index > length - 1:
+                new_index = -1
+            else:
+                new_index = last_index - 1
+        else:
+            if last_index >= length - 1:
+                new_index = 0
+            else:
+                new_index = last_index + 1
+    else:
+        await My_promos.view.set()
+
+    await state.update_data({'promo_index': new_index, 'promo_id': result[new_index][0]})
+    text = f"Реклама №{result[new_index][0]}\n"\
+           f"Создано: {datetime.datetime.strftime(result[new_index][5], '%d.%m.%Y')}\n"\
+           f"Просмотров: {result[new_index][7]}/{result[new_index][6]}\n"\
+           f"Одобрено модератором: {'да' if result[new_index][8] else 'нет'}\n"\
+           f"Содержимое:\n\n{result[new_index][2]}"
+    if edit:
+        try:
+            if result[new_index][3]:
+                await bot.edit_message_media(types.InputMediaPhoto(result[new_index][3], caption=text), callback_query.message.chat.id, callback_query.message.message_id, reply_markup=key)
+            elif result[new_index][4]:
+                await bot.edit_message_media(types.InputMediaVideo(result[new_index][4], caption=text), callback_query.message.chat.id, callback_query.message.message_id, reply_markup=key)
+            else:
+                await bot.edit_message_text(text, callback_query.message.chat.id, callback_query.message.message_id, reply_markup=key)
+        except utils.exceptions.MessageNotModified: pass
+        except utils.exceptions.BadRequest:await callback_query.answer("Не нажимайте так часто!", show_alert=True)
+    else:
+        if result[new_index][3]:
+            await bot.send_photo(callback_query.message.chat.id, result[new_index][3], caption=text, reply_markup=key)
+        elif result[new_index][4]:
+            await bot.send_video(callback_query.message.chat.id, result[new_index][4], caption=text, reply_markup=key)
+        else:
+            await bot.send_message(callback_query.message.chat.id, text, reply_markup=key)
+        try: await bot.delete_message(callback_query.message.chat.id, callback_query.message.message_id)
+        except utils.exceptions.MessageCantBeDeleted: pass
 
 
-async def my_promos(callback_query): ...
-async def referrals(callback_query): ...
+async def referrals(callback_query):
+    ##СДЕЛАТЬ РЕФЕРАЛОВ!!!!!!!!!!
+
+
+
+
 async def top_up_balance(callback_query): ...
 
 
@@ -380,7 +447,7 @@ async def callback_inline(callback_query: types.CallbackQuery, state: FSMContext
     elif callback_query.data == Buttons.main[3].data:
         await my_ads(callback_query, state)
     elif callback_query.data == Buttons.main[4].data:
-        await my_promos(callback_query)
+        await my_promos(callback_query, state)
     elif callback_query.data == Buttons.main[5].data:
         await referrals(callback_query)
     elif callback_query.data == Buttons.main[6].data:
@@ -866,6 +933,13 @@ async def callback_inline(callback_query: types.CallbackQuery, state: FSMContext
         await callback_query.answer("Отменено")
         await my_ads(callback_query, state)
 
+
+@dp.callback_query_handler(lambda callback_query: True, state=My_promos.view)
+async def callback_inline(callback_query: types.CallbackQuery, state: FSMContext):
+    if await _back(callback_query, state, main_menu, callback_query.message.chat.id, callback_query.message.chat.first_name, callback_query.message.message_id):
+        return
+    if callback_query.data == Buttons.arrows[0].data or callback_query.data == Buttons.arrows[1].data:
+        await my_promos(callback_query, state, edit=True)
 
 
 
