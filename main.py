@@ -48,6 +48,21 @@ class My_promos(StatesGroup):
     view = State()
 
 
+class Top_up_balance(StatesGroup):
+    amount = State()
+    pay = State()
+
+
+class Admin_privileges(StatesGroup):
+    user_id = State()
+    privileges = State()
+    choose_privilege = State()
+
+
+
+
+
+
 
 def inline_keyboard(buttons_set, back_data=None):
     key = types.InlineKeyboardMarkup()
@@ -113,7 +128,7 @@ async def main_menu(user_id, first_name, delete_message=None, referral=None):
     conn = mysql.connector.connect(host=c.host, user=c.user, passwd=c.password, database=c.db)
     cursor = conn.cursor(buffered=True)
     selectQuery = "SELECT balance FROM users WHERE user_id=(%s)"
-    selectAdminQuery = "SELECT ID FROM admins WHERE user_id=(%s)"
+    selectAdminQuery = "SELECT ID FROM admins WHERE user_id=(%s) AND menu_admin=1"
     cursor.execute(selectQuery, [user_id])
     result = cursor.fetchone()
     admin = False
@@ -128,11 +143,18 @@ async def main_menu(user_id, first_name, delete_message=None, referral=None):
         balance = 0
     buttons = buttons_cortege(Buttons.main)
     if admin:
-        buttons += buttons_cortege(Buttons.main_admin)
+        buttons += (Buttons.main_admin.title, Buttons.main_admin.data),
     key = inline_keyboard(buttons)
     await bot.send_message(user_id, f"Здравствуйте, {first_name}.\nНа вашем балансе: {balance} грн.", reply_markup=key)
     if delete_message:
         try: await bot.delete_message(user_id, delete_message)
+        except utils.exceptions.MessageCantBeDeleted: pass
+
+
+async def admin_menu(callback_query, delete_message=None):
+    await callback_query.message.answer("Меню администратора", reply_markup=inline_keyboard(buttons_cortege(Buttons.admin), Buttons.back.data))
+    if delete_message:
+        try: await bot.delete_message(callback_query.message.chat.id, delete_message)
         except utils.exceptions.MessageCantBeDeleted: pass
 
 
@@ -414,7 +436,7 @@ async def my_promos(callback_query, state, edit=False):
             else:
                 await bot.edit_message_text(text, callback_query.message.chat.id, callback_query.message.message_id, reply_markup=key)
         except utils.exceptions.MessageNotModified: pass
-        except utils.exceptions.BadRequest:await callback_query.answer("Не нажимайте так часто!", show_alert=True)
+        except utils.exceptions.BadRequest: await callback_query.answer("Не нажимайте так часто!", show_alert=True)
     else:
         if result[new_index][3]:
             await bot.send_photo(callback_query.message.chat.id, result[new_index][3], caption=text, reply_markup=key)
@@ -427,18 +449,54 @@ async def my_promos(callback_query, state, edit=False):
 
 
 async def referrals(callback_query):
-    ##СДЕЛАТЬ РЕФЕРАЛОВ!!!!!!!!!!
+    conn = mysql.connector.connect(host=c.host, user=c.user, passwd=c.password, database=c.db)
+    cursor = conn.cursor(buffered=True)
+    countQuery = "SELECT COUNT(ID) FROM users WHERE referral=(%s)"
+    selectBonusQuery = "SELECT referral_balance FROM users WHERE user_id=(%s)"
+    cursor.execute(countQuery, [callback_query.message.chat.id])
+    num = cursor.fetchone()[0]
+    bonus = 0
+    if num:
+        cursor.execute(selectBonusQuery, [callback_query.message.chat.id])
+        bonus = cursor.fetchone()[0]
+    conn.close()
+    await callback_query.message.answer(f"*Ваша реферальная ссылка:*\n"
+                                        f"`https://t.me/AdvancedAdsBot?start=ref{callback_query.message.chat.id}`\n"
+                                        f"*Приглашено пользователей:* {num}\n*Заработано бонусов:* {bonus} грн.",
+                                        parse_mode="Markdown", reply_markup=inline_keyboard(Buttons.back))
+    try: await bot.delete_message(callback_query.message.chat.id, callback_query.message.message_id)
+    except utils.exceptions.MessageCantBeDeleted: pass
 
 
+async def top_up_balance(callback_query):
+    await Top_up_balance.amount.set()
+    await callback_query.message.answer("Введите сумму на которую хотите пополнить баланс:")
 
 
-async def top_up_balance(callback_query): ...
+async def admin_privileges(callback_query):
+    await Admin_privileges.user_id.set()
+    await callback_query.message.answer("Перешлите мне любое сообщение пользователя", reply_markup=inline_keyboard(Buttons.back))
+    try: await bot.delete_message(callback_query.message.chat.id, callback_query.message.message_id)
+    except utils.exceptions.MessageCantBeDeleted: pass
+
+
+async def admin_channels(callback_query):
+    # ДОБАВИТЬ КАНАЛЫ АДМИНА
+
+
+async def admin_settings(callback_query):...
+async def admin_promo(callback_query):...
+async def admin_ads(callback_query):...
+
 
 
 
 @dp.callback_query_handler(lambda callback_query: True)
 async def callback_inline(callback_query: types.CallbackQuery, state: FSMContext):
-    if callback_query.data == Buttons.main[0].data:
+    if callback_query.data == Buttons.back.data or callback_query.data == Buttons.back_to_menu.data:
+        await main_menu(callback_query.message.chat.id, callback_query.message.chat.first_name, delete_message=callback_query.message.message_id)
+
+    elif callback_query.data == Buttons.main[0].data:
         await choose_channel(callback_query)
     elif callback_query.data == Buttons.main[1].data:
         await proms_choose_mode(callback_query)
@@ -453,20 +511,23 @@ async def callback_inline(callback_query: types.CallbackQuery, state: FSMContext
     elif callback_query.data == Buttons.main[6].data:
         await top_up_balance(callback_query)
 
-    elif callback_query.data == Buttons.back.data:
-        await main_menu(callback_query.message.chat.id, callback_query.message.chat.first_name, delete_message=callback_query.message.message_id)
-    elif callback_query.data == Buttons.back_to_menu.data:
-        await main_menu(callback_query.message.chat.id, callback_query.message.chat.first_name, delete_message=callback_query.message.message_id)
-
     elif callback_query.data == Buttons.make_promo[0].data:
         await watch_proms(callback_query, state)
     elif callback_query.data == Buttons.make_promo[1].data:
         await make_promo(callback_query)
-
     elif callback_query.data == Buttons.search_request[0].data:
         await search_my_requests(callback_query)
     elif callback_query.data == Buttons.search_request[1].data:
         await search_make_requests(callback_query)
+
+    elif callback_query.data == Buttons.main_admin.data:
+        await admin_menu(callback_query, callback_query.message.message_id)
+    elif callback_query.data == Buttons.admin[0].data:
+        await admin_privileges(callback_query)
+    elif callback_query.data == Buttons.admin[1].data:
+        ...
+
+
 
 
 
@@ -596,7 +657,7 @@ async def publish_to_channel(callback_query, state):
     data = await state.get_data()
     selectBalanceQuery = "SELECT balance FROM users WHERE user_id=(%s)"
     selectChannelQuery = "SELECT username FROM channels WHERE ID=(%s)"
-    insertQuery = "INSERT INTO ads (user_id, channel, message_id, text, photos, videos, period) VALUES (%s, %s, %s, %s, %s, %s, %s)"
+    insertQuery = "INSERT INTO ads (user_id, channel, message_id, period) VALUES (%s, %s, %s, %s)"
     updateQuery = "UPDATE users SET balance=(%s) WHERE user_id=(%s)"
     conn = mysql.connector.connect(host=c.host, user=c.user, passwd=c.password, database=c.db)
     cursor = conn.cursor(buffered=True)
@@ -622,10 +683,7 @@ async def publish_to_channel(callback_query, state):
 
     conn = mysql.connector.connect(host=c.host, user=c.user, passwd=c.password, database=c.db)
     cursor = conn.cursor(buffered=True)
-    photo = str(data['media']['photo']) if data['media']['photo'] else None
-    video = str(data['media']['video']) if data['media']['video'] else None
-    cursor.executemany(insertQuery, [(callback_query.message.chat.id, data['channel']['ID'], m.message_id,
-                                      data['media']['caption'], photo, video, data['period'])])
+    cursor.executemany(insertQuery, [(callback_query.message.chat.id, data['channel']['ID'], m.message_id, data['period'])])
     cursor.executemany(updateQuery, [(balance - data['price'], callback_query.message.chat.id)])
     conn.commit()
     conn.close()
@@ -940,6 +998,133 @@ async def callback_inline(callback_query: types.CallbackQuery, state: FSMContext
         return
     if callback_query.data == Buttons.arrows[0].data or callback_query.data == Buttons.arrows[1].data:
         await my_promos(callback_query, state, edit=True)
+
+
+@dp.message_handler(regexp='^\\d+$', state=Top_up_balance.amount)
+async def search(message: types.Message, state: FSMContext):
+    amount = int(message.text)
+    if amount < 1 or amount > 1000000:
+        await message.reply("Недействительная сумма!")
+        return
+    await state.update_data({'amount': amount})
+    await Top_up_balance.next()
+    key = types.InlineKeyboardMarkup()
+    key.add(types.InlineKeyboardButton("Оплатить", url="https://privat24.ua"))
+    key.add(types.InlineKeyboardButton(Buttons.back.title, callback_data=Buttons.back.data))
+    await message.answer(f"Ваш баланс будет пополнен на {amount} грн. Чтобы оплатить используйте кнопку ниже."
+                         "_После оплаты бот автоматически обработает платёж._", parse_mode="Markdown", reply_markup=key)
+
+
+@dp.callback_query_handler(lambda callback_query: True, state=Top_up_balance.pay)
+async def callback_inline(callback_query: types.CallbackQuery, state: FSMContext):
+    # ТУТ НАДО КАК-ТО ОБРАБОТАТЬ ПЛАТЁЖ
+    pass
+
+
+@dp.callback_query_handler(lambda callback_query: True, state=Admin_privileges.user_id)
+async def callback_inline(callback_query: types.CallbackQuery, state: FSMContext):
+    if await _back(callback_query, state, admin_menu, callback_query, callback_query.message.message_id):
+        return
+
+
+@dp.message_handler(content_types=types.ContentTypes.ANY, state=Admin_privileges.user_id)
+async def search(message: types.Message, state: FSMContext):
+    forward = message.forward_from
+    if not forward:
+        await message.answer("Это не пересланное сообщение!")
+        return
+    conn = mysql.connector.connect(host=c.host, user=c.user, passwd=c.password, database=c.db)
+    cursor = conn.cursor(buffered=True)
+    selectQuery = "SELECT ID FROM users WHERE user_id=(%s)"
+    selectAdminQuery = "SELECT menu_admin, menu_priv, priv_add, priv_remove FROM admins WHERE user_id=(%s)"
+    cursor.execute(selectQuery, [forward.id])
+    db_id = cursor.fetchone()
+    if not db_id:
+        conn.close()
+        await state.finish()
+        await message.answer("Пользователь отсутствует в базе", reply_markup=inline_keyboard(Buttons.back))
+        return
+    cursor.execute(selectAdminQuery, [forward.id])
+    result = cursor.fetchone()
+    conn.close()
+    if not result:
+        privileges = " - Отсутствуют"
+    else:
+        privileges = ''
+        if result[0]:
+            privileges += " - Доступ к меню «Администратор»\n"
+        if result[1]:
+            privileges += " - Доступ к меню «Привилегии»\n"
+        if result[2]:
+            privileges += " - Добавление привилегий\n"
+        if result[3]:
+            privileges += " - Удаление привилегий\n"
+        if not privileges:
+            privileges = " - Отсутствуют"
+    await Admin_privileges.next()
+    await state.update_data({'priv_id': forward.id, 'priv_name': forward.first_name})
+    await message.answer(f"ID: {db_id[0]}\nИмя: {forward.first_name}\nЮзернейм: @{forward.username}\nПривилегии:\n{privileges}",
+                         reply_markup=inline_keyboard(buttons_cortege(Buttons.add_remove_priv), Buttons.back.data))
+
+
+@dp.callback_query_handler(lambda callback_query: True, state=Admin_privileges.privileges)
+async def callback_inline(callback_query: types.CallbackQuery, state: FSMContext):
+    if await _back(callback_query, state, admin_menu, callback_query, callback_query.message.message_id):
+        return
+    await Admin_privileges.next()
+    data = await state.get_data()
+    buttons = buttons_cortege(Buttons.privileges)
+    if callback_query.data == Buttons.add_remove_priv[0].data:
+        await state.update_data({'priv': 'add'})
+        buttons = inline_keyboard([(Buttons.add_remove_all_priv[0].title, Buttons.add_remove_all_priv[0].data)] + buttons)
+        verb = 'добавить'
+    else:
+        await state.update_data({'priv': 'remove'})
+        buttons = inline_keyboard([(Buttons.add_remove_all_priv[1].title, Buttons.add_remove_all_priv[1].data)] + buttons)
+        verb = 'убрать'
+    await callback_query.message.answer(f"Выберите привилегию которую хотите {verb} пользователю {data['priv_name']}", reply_markup=buttons)
+    try: await bot.delete_message(callback_query.message.chat.id, callback_query.message.message_id)
+    except utils.exceptions.MessageCantBeDeleted: pass
+
+
+@dp.callback_query_handler(lambda callback_query: True, state=Admin_privileges.choose_privilege)
+async def callback_inline(callback_query: types.CallbackQuery, state: FSMContext):
+    if await _back(callback_query, state, admin_menu, callback_query, callback_query.message.message_id):
+        return
+    data = await state.get_data()
+    updateQuery = None
+    if data['priv'] == 'add':
+        if callback_query.data == Buttons.add_remove_all_priv[0].data:
+            updateQuery = "UPDATE admins SET menu_admin=1, menu_priv=1, priv_add=1, priv_remove=1 WHERE user_id=(%s)"
+        elif callback_query.data == Buttons.privileges[0].data:
+            updateQuery = "UPDATE admins SET menu_admin=1 WHERE user_id=(%s)"
+        elif callback_query.data == Buttons.privileges[1].data:
+            updateQuery = "UPDATE admins SET menu_priv=1 WHERE user_id=(%s)"
+        elif callback_query.data == Buttons.privileges[2].data:
+            updateQuery = "UPDATE admins SET priv_add=1 WHERE user_id=(%s)"
+        elif callback_query.data == Buttons.privileges[3].data:
+            updateQuery = "UPDATE admins SET priv_remove=1 WHERE user_id=(%s)"
+    elif data['priv'] == 'remove':
+        if callback_query.data == Buttons.add_remove_all_priv[1].data:
+            updateQuery = "UPDATE admins SET menu_admin=0, menu_priv=0, priv_add=0, priv_remove=0 WHERE user_id=(%s)"
+        elif callback_query.data == Buttons.privileges[0].data:
+            updateQuery = "UPDATE admins SET menu_admin=0 WHERE user_id=(%s)"
+        elif callback_query.data == Buttons.privileges[1].data:
+            updateQuery = "UPDATE admins SET menu_priv=0 WHERE user_id=(%s)"
+        elif callback_query.data == Buttons.privileges[2].data:
+            updateQuery = "UPDATE admins SET priv_add=0 WHERE user_id=(%s)"
+        elif callback_query.data == Buttons.privileges[3].data:
+            updateQuery = "UPDATE admins SET priv_remove=0 WHERE user_id=(%s)"
+    conn = mysql.connector.connect(host=c.host, user=c.user, passwd=c.password, database=c.db)
+    cursor = conn.cursor(buffered=True)
+    cursor.execute(updateQuery, [data['priv_id']])
+    conn.commit()
+    conn.close()
+    await state.finish()
+    await callback_query.answer("Привилегии успешно изменены", show_alert=True)
+    await admin_menu(callback_query, callback_query.message.message_id)
+
+
 
 
 
