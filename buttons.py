@@ -39,3 +39,6 @@ class Buttons:
         Button('Удаление привилегий', 'priv_remove_priv')
     admin_channels = Button('Добавить канал', 'add_channel'), Button('Удалить канал', 'delete_channel')
     admin_settings = Button('1', 'set_1'), Button('2', 'set_2'), Button('3', 'set_3'), Button('4', 'set_4')
+    admin_promo = Button('Одобрить', 'approve'), Button('Отклонить', 'reject')
+    report = Button('Жалоба', 'report')
+    report_media_group = Button('Жалоба', 'report_mg')
