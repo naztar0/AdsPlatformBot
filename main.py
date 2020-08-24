@@ -1,7 +1,9 @@
 #!/usr/bin/env python
 import constants as c
 from buttons import Buttons, Button
+import pay
 import media_group
+import expired_ads_checker
 import datetime
 import json
 import time
@@ -13,7 +15,6 @@ from aiogram.dispatcher.filters.state import State, StatesGroup
 from aiogram.contrib.fsm_storage.memory import MemoryStorage
 
 import mysql.connector
-
 
 bot = Bot(c.token)
 storage = MemoryStorage()
@@ -43,6 +44,7 @@ class Make_search_request(StatesGroup):
 
 class My_ads(StatesGroup):
     view = State()
+    edit = State()
 
 
 class My_promos(StatesGroup):
@@ -51,7 +53,6 @@ class My_promos(StatesGroup):
 
 class Top_up_balance(StatesGroup):
     amount = State()
-    pay = State()
 
 
 class Admin_privileges(StatesGroup):
@@ -190,6 +191,28 @@ async def start(message: types.Message):
     await main_menu(message.chat.id, message.chat.first_name, referral=referral)
 
 
+async def check_search_requests(text, message_id, channel):
+    selectQuery = f"SELECT user_id, keyword FROM search_requests"
+    deleteQuery = "DELETE FROM search_requests WHERE created<(%s)"
+    now = datetime.datetime.now()
+    conn = mysql.connector.connect(host=c.host, user=c.user, passwd=c.password, database=c.db)
+    cursor = conn.cursor(buffered=True)
+    cursor.execute(deleteQuery, [now - datetime.timedelta(30)])
+    conn.commit()
+    cursor.execute(selectQuery)
+    results = cursor.fetchall()
+    conn.close()
+    for result in results:
+        keyword = str(result[1]).replace('_', '\\_').replace('*', '\\*').replace('`', '\\`').replace('[', '\\[')
+        if result[1] in text:
+            try:
+                await bot.send_message(result[0], f"Новое [объявление](https://t.me/{channel[1:]}/{message_id}) по фразе «{keyword}»", parse_mode="Markdown")
+                await sleep(.1)
+            except utils.exceptions.BotBlocked: pass
+            except utils.exceptions.UserDeactivated: pass
+            except utils.exceptions.ChatNotFound: pass
+
+
 async def choose_channel(callback_query):
     conn = mysql.connector.connect(host=c.host, user=c.user, passwd=c.password, database=c.db)
     cursor = conn.cursor(buffered=True)
@@ -204,6 +227,15 @@ async def choose_channel(callback_query):
     await callback_query.message.answer("Выберите интересующий вас канал:", reply_markup=key)
     try: await bot.delete_message(callback_query.message.chat.id, callback_query.message.message_id)
     except utils.exceptions.MessageCantBeDeleted: pass
+
+
+def delete_invalid_ad_from_db(message_id, channel):
+    conn = mysql.connector.connect(host=c.host, user=c.user, passwd=c.password, database=c.db)
+    cursor = conn.cursor(buffered=True)
+    deleteQuery = "DELETE FROM ads WHERE message_id=(%s) AND channel=(%s)"
+    cursor.execute(deleteQuery, [(message_id, channel)])
+    conn.commit()
+    conn.close()
 
 
 async def proms_choose_mode(callback_query):
@@ -286,7 +318,7 @@ async def watch_proms(callback_query, state, arrow=None):
                 break
         if arrow == Buttons.arrows[0].data:
             if last_index == 0 or last_index > length - 1:
-                new_index = -1
+                new_index = length - 1
             else:
                 new_index = last_index - 1
         else:
@@ -349,13 +381,13 @@ async def search_make_requests(callback_query):
     except utils.exceptions.MessageCantBeDeleted: pass
 
 
-async def my_ads(callback_query, state):
+async def my_ads(callback_query, state, edit=True):
     data = await state.get_data()
     last_index = data.get('ad_index')
     conn = mysql.connector.connect(host=c.host, user=c.user, passwd=c.password, database=c.db)
     cursor = conn.cursor(buffered=True)
     selectQuery = "SELECT channel, message_id, ID, created, period FROM ads WHERE user_id=(%s)"
-    selectChannelQuery = "SELECT username, name FROM channels WHERE ID=(%s)"
+    selectChannelQuery = "SELECT username, name, chat_id FROM channels WHERE ID=(%s)"
     cursor.execute(selectQuery, [callback_query.message.chat.id])
     result = cursor.fetchall()
     conn.close()
@@ -368,7 +400,7 @@ async def my_ads(callback_query, state):
         length = len(result)
         if callback_query.data == Buttons.arrows[0].data:
             if last_index == 0 or last_index > length - 1:
-                new_index = -1
+                new_index = length - 1
             else:
                 new_index = last_index - 1
         else:
@@ -390,22 +422,27 @@ async def my_ads(callback_query, state):
     channel = cursor.fetchone()
     conn.close()
 
-    await state.update_data({'ad_index': new_index, 'ad_id': result[new_index][2]})
-    await bot.forward_message(callback_query.message.chat.id, f'@{channel[0]}', result[new_index][1])
-    await callback_query.message.answer(
-        f"Объявление №{result[new_index][2]}\n"
-        f"Канал: {channel[1]} (@{channel[0]})\n"
-        f"Создано: {datetime.datetime.strftime(result[new_index][3], '%d.%m.%Y')}\n"
-        f"Длительность: {result[new_index][4]} дней\n"
-        f"Активно до: {datetime.datetime.strftime(result[new_index][3] + datetime.timedelta(result[new_index][4]), '%d.%m.%Y')}",
-        reply_markup=inline_keyboard(Buttons.delete_ad, back_data=True, arrows=True))
+    await state.update_data({'ad_index': new_index, 'ad_id': result[new_index][2], 'channel': channel[2], 'message_id': result[new_index][1]})
+    format_channel_name = str(channel[1]).replace('_', '\\_').replace('*', '\\*').replace('`', '\\`').replace('[', '\\[')
+    format_channel_username = str(channel[0]).replace('_', '\\_')
+    text = \
+        f"[Объявление](https://t.me/{channel[0]}/{result[new_index][1]}) №{result[new_index][2]}\n" \
+        f"Канал: {format_channel_name} (@{format_channel_username})\n" \
+        f"Создано: {datetime.datetime.strftime(result[new_index][3], '%d.%m.%Y')}\n" \
+        f"Длительность: {result[new_index][4]} дней\n" \
+        f"Активно до: {datetime.datetime.strftime(result[new_index][3] + datetime.timedelta(result[new_index][4]), '%d.%m.%Y')}"
 
-    try:
-        last_message_id = callback_query.message.message_id
-        await bot.delete_message(callback_query.message.chat.id, last_message_id)
-        await bot.delete_message(callback_query.message.chat.id, last_message_id - 1)
-    except utils.exceptions.MessageCantBeDeleted: pass
-    except utils.exceptions.MessageToDeleteNotFound: await callback_query.answer("Не нажимайте так часто!", show_alert=True)
+    if edit:
+        try:
+            await bot.edit_message_text(text, callback_query.message.chat.id, callback_query.message.message_id,
+                                        reply_markup=inline_keyboard(buttons_cortege(Buttons.edit_delete_ad), back_data=True, arrows=True), parse_mode="Markdown")
+        except utils.exceptions.MessageNotModified: pass
+        except utils.exceptions.BadRequest: await callback_query.answer("Не нажимайте так часто!", show_alert=True)
+    else:
+        await bot.send_message(callback_query.message.chat.id, text,
+                               reply_markup=inline_keyboard(buttons_cortege(Buttons.edit_delete_ad), back_data=True, arrows=True), parse_mode="Markdown")
+        try: await bot.delete_message(callback_query.message.chat.id, callback_query.message.message_id)
+        except utils.exceptions.MessageCantBeDeleted: pass
 
 
 async def my_promos(callback_query, state, edit=False):
@@ -427,7 +464,7 @@ async def my_promos(callback_query, state, edit=False):
         length = len(result)
         if callback_query.data == Buttons.arrows[0].data:
             if last_index == 0 or last_index > length - 1:
-                new_index = -1
+                new_index = length - 1
             else:
                 new_index = last_index - 1
         else:
@@ -637,11 +674,7 @@ async def admin_ads(callback_query):
 
 
 async def report_send(callback_query):
-    double = False
     message_id = callback_query.message.message_id
-    if callback_query.data == Buttons.report_media_group.data:
-        message_id -= 1
-        double = True
     selectChannelQuery = "SELECT ID FROM channels WHERE username=(%s)"
     selectExistsUserQuery = "SELECT EXISTS (SELECT ID FROM reports WHERE channel=(%s) AND message_id=(%s) AND user_id=(%s))"
     selectQuery = "SELECT COUNT(ID) FROM reports WHERE channel=(%s) AND message_id=(%s)"
@@ -654,26 +687,26 @@ async def report_send(callback_query):
     channel = cursor.fetchone()[0]
     cursor.executemany(selectExistsUserQuery, [(channel, message_id, callback_query.from_user.id)])
     exists = cursor.fetchone()[0]
-    if False:  # exists for RELEASE, False for DEBUG
+    if exists:  # exists for RELEASE, False for DEBUG
         conn.close()
         await callback_query.answer("Вы уже подали жалобу!", show_alert=True)
         return
     cursor.executemany(selectQuery, [(channel, message_id)])
     rep_num = cursor.fetchone()[0]
     admins = None
-    if rep_num < 5 or 10 > rep_num > 5:  # количество игнорирования
+    ban_admin = 5  # количество для уведомления админа
+    ban_auto = 10  # количество для автоматического удаления
+    if rep_num < ban_admin or ban_auto > rep_num > ban_admin:  # количество игнорирования
         cursor.executemany(insertQuery, [(channel, message_id, callback_query.from_user.id)])
-    elif rep_num == 5:  # количество для уведомления админа
+    elif rep_num == ban_admin:
         cursor.executemany(insertQuery, [(channel, message_id, callback_query.from_user.id)])
         cursor.execute(selectAdmins)
         admins = cursor.fetchall()
-    elif rep_num == 10:  # количество для автоматического удаления
+    elif rep_num == ban_auto:
         cursor.executemany(deleteQuery, [(channel, message_id)])
         conn.commit()
         conn.close()
         try:
-            if double:
-                raise utils.exceptions.MessageCantBeDeleted
             await bot.delete_message(callback_query.message.chat.id, message_id)
         except utils.exceptions.MessageCantBeDeleted: pass
         except utils.exceptions.MessageToDeleteNotFound: pass
@@ -683,7 +716,7 @@ async def report_send(callback_query):
     await callback_query.answer("Жалоба на объявление отправлена", show_alert=True)
     if admins:
         key = types.InlineKeyboardMarkup()
-        but_1 = types.InlineKeyboardButton('Удалить', callback_data=f'del_{channel}_{callback_query.message.chat.id}_{message_id}_{1 if double else 0}')
+        but_1 = types.InlineKeyboardButton('Удалить', callback_data=f'del_{channel}_{callback_query.message.chat.id}_{message_id}')
         but_2 = types.InlineKeyboardButton('Оставить', callback_data='del')
         key.add(but_1, but_2)
         for admin in admins:
@@ -692,25 +725,24 @@ async def report_send(callback_query):
             await sleep(.1)
 
 
-async def delete_message(callback_query):
+async def admin_delete_message(callback_query):
     data = str(callback_query.data).split('_')
     if len(data) == 1:
-        try: await bot.delete_message(callback_query.message.chat.id, callback_query.message.message_id)
+        try:
+            await bot.delete_message(callback_query.message.chat.id, callback_query.message.message_id)
         except utils.exceptions.MessageCantBeDeleted: pass
         except utils.exceptions.MessageToDeleteNotFound: pass
-        await callback_query.answer('Оставлено', show_alert=True)
+        await callback_query.answer('Оставлено')
         return
-    channel, channel_id, message_id, double = data[1], int(data[2]), int(data[3]), int(data[4])
+    channel, channel_id, message_id = data[1], int(data[2]), int(data[3])
     success = False
     try:
-        if double:
-            raise utils.exceptions.MessageCantBeDeleted
         await bot.delete_message(channel_id, message_id)
         success = True
     except utils.exceptions.MessageCantBeDeleted:
         await callback_query.answer("Я не могу удалить это объявление, удалите вручную", show_alert=True)
     except utils.exceptions.MessageToDeleteNotFound:
-        await callback_query.answer("Это объявление уже было удалено", show_alert=True)
+        await callback_query.answer("Это объявление уже было удалено")
     conn = mysql.connector.connect(host=c.host, user=c.user, passwd=c.password, database=c.db)
     cursor = conn.cursor(buffered=True)
     deleteQuery = "DELETE FROM ads WHERE channel=(%s) AND message_id=(%s)"
@@ -721,7 +753,7 @@ async def delete_message(callback_query):
         try: await bot.delete_message(callback_query.message.chat.id, callback_query.message.message_id)
         except utils.exceptions.MessageCantBeDeleted: pass
         except utils.exceptions.MessageToDeleteNotFound: pass
-        await callback_query.answer("Успешно удалено!", show_alert=True)
+        await callback_query.answer("Успешно удалено!")
 
 
 
@@ -738,7 +770,7 @@ async def callback_inline(callback_query: types.CallbackQuery, state: FSMContext
     elif callback_query.data == Buttons.main[2].data:
         await search_choose_option(callback_query)
     elif callback_query.data == Buttons.main[3].data:
-        await my_ads(callback_query, state)
+        await my_ads(callback_query, state, False)
     elif callback_query.data == Buttons.main[4].data:
         await my_promos(callback_query, state)
     elif callback_query.data == Buttons.main[5].data:
@@ -768,11 +800,10 @@ async def callback_inline(callback_query: types.CallbackQuery, state: FSMContext
     elif callback_query.data == Buttons.admin[4].data:
         await admin_ads(callback_query)
 
-    elif callback_query.data == Buttons.report.data or \
-            callback_query.data == Buttons.report_media_group.data:
+    elif callback_query.data == Buttons.report.data:
         await report_send(callback_query)
     elif callback_query.data[:3] == 'del':
-        await delete_message(callback_query)
+        await admin_delete_message(callback_query)
 
 
 
@@ -858,10 +889,10 @@ async def period_and_confirm(message, state, period=None, callback_query=None):
     if not callback_query:
         await Channels.next()
         if is_media_group:
-            if not callback_query and False:
+            if not callback_query and False:  # отключен предпросмотр медиа
                 media = _media_group_builder(data, caption=False)
                 await bot.send_media_group(message.chat.id, media)
-            await bot.send_message(message.chat.id, text + "\n\nАльбом с медиа: загружен", reply_markup=key)
+            await bot.send_message(message.chat.id, text + "\n\n❗ Альбом с медиа: загружен ❗", reply_markup=key)
         elif data['media']['photo']:
             await bot.send_photo(message.chat.id, data['media']['photo'], text, reply_markup=key)
         elif data['media']['video']:
@@ -895,8 +926,9 @@ async def media_text(message: types.Message, state: FSMContext):
         text = await get_caption(message, message.caption)
         video = message.video.file_id
     elif message.text:
-        text = message.text
+        text = await get_caption(message, message.text)
     if not text:
+        await state.update_data({'media_group': dict()})
         return
     await state.update_data({'media': {'caption': text, 'photo': photo, 'video': video}})
     await period_and_confirm(message, state)
@@ -906,7 +938,7 @@ async def publish_to_channel(callback_query, state):
     data = await state.get_data()
     selectBalanceQuery = "SELECT balance FROM users WHERE user_id=(%s)"
     selectChannelQuery = "SELECT username FROM channels WHERE ID=(%s)"
-    insertQuery = "INSERT INTO ads (user_id, channel, message_id, period) VALUES (%s, %s, %s, %s)"
+    insertQuery = "INSERT INTO ads (user_id, channel, message_id, period, expire, text) VALUES (%s, %s, %s, %s, %s, %s)"
     updateQuery = "UPDATE users SET balance=(%s) WHERE user_id=(%s)"
     conn = mysql.connector.connect(host=c.host, user=c.user, passwd=c.password, database=c.db)
     cursor = conn.cursor(buffered=True)
@@ -919,15 +951,14 @@ async def publish_to_channel(callback_query, state):
         await callback_query.answer(f"На вашем балансе недостаточно средств. Текущая сумма на балансе: {balance} грн.", show_alert=True)
         return
 
-    key = types.InlineKeyboardMarkup(5)
+    key = inline_keyboard(Buttons.report)
     channel = f'@{channel}'
     if data.get('media_group'):
-        key.add(types.InlineKeyboardButton(Buttons.report_media_group.title, callback_data=Buttons.report_media_group.data))
         media = _media_group_builder(data, caption=True)
-        m = await bot.send_media_group(channel, media)
-        await bot.send_message(channel, '⬆ Пожаловаться ⬆', reply_markup=key)
+        n = await bot.send_media_group(c.media_channel_at, media)
+        m = await bot.send_message(channel, f"[👉 Нажмите для просмотра всех медиа 👈](https://t.me/{c.media_channel}/{n[0].message_id})",
+                                   parse_mode="Markdown", reply_markup=key)
     else:
-        key.add(types.InlineKeyboardButton(Buttons.report.title, callback_data=Buttons.report.data))
         if data['media']['photo']:
             m = await bot.send_photo(channel, data['media']['photo'], data['media']['caption'], reply_markup=key)
         elif data['media']['video']:
@@ -935,13 +966,10 @@ async def publish_to_channel(callback_query, state):
         else:
             m = await bot.send_message(channel, data['media']['caption'], reply_markup=key)
 
-    if isinstance(m, list):
-        message_id = m[0].message_id
-    else:
-        message_id = m.message_id
     conn = mysql.connector.connect(host=c.host, user=c.user, passwd=c.password, database=c.db)
     cursor = conn.cursor(buffered=True)
-    cursor.executemany(insertQuery, [(callback_query.message.chat.id, data['channel']['ID'], message_id, data['period'])])
+    cursor.executemany(insertQuery, [(callback_query.message.chat.id, data['channel']['ID'], m.message_id, data['period'],
+                                     datetime.datetime.now() + datetime.timedelta(data['period']), data['media']['caption'])])
     cursor.executemany(updateQuery, [(balance - data['price'], callback_query.message.chat.id)])
     conn.commit()
     conn.close()
@@ -951,6 +979,7 @@ async def publish_to_channel(callback_query, state):
                                         reply_markup=inline_keyboard(Buttons.back_to_menu))
     try: await bot.delete_message(callback_query.message.chat.id, callback_query.message.message_id)
     except utils.exceptions.MessageCantBeDeleted: pass
+    await check_search_requests(data['media']['caption'], m.message_id, channel)
 
 
 @dp.callback_query_handler(lambda callback_query: True, state=Channels.period_confirm)
@@ -1098,9 +1127,11 @@ async def callback_inline(callback_query: types.CallbackQuery, state: FSMContext
 @dp.message_handler(content_types=['text'], state=Make_search_request.keyword)
 async def search(message: types.Message, state: FSMContext):
     keyword = message.text
-    if len(keyword) > 40:
+    if len(keyword) > 30:
         await message.reply("Слишком длинная фраза, разрешено не более 40 символов")
         return
+    await state.update_data({'keyword': keyword, 'ad_index': 0})
+    await Make_search_request.next()
     conn = mysql.connector.connect(host=c.host, user=c.user, passwd=c.password, database=c.db)
     cursor = conn.cursor(buffered=True)
     searchQuery = f"SELECT channel, message_id FROM ads WHERE text LIKE '%{keyword}%'"
@@ -1111,17 +1142,11 @@ async def search(message: types.Message, state: FSMContext):
         cursor.execute(selectChannelQuery, [result[0][0]])
         channel = cursor.fetchone()[0]
         conn.close()
+        await message.answer(f"[Объявление](https://t.me/{channel}/{result[0][1]})", parse_mode="Markdown",
+                             reply_markup=inline_keyboard(Buttons.on_notifications, back_data=True, arrows=True))
     else:
         conn.close()
-        await state.finish()
-        await message.reply(f"По запросу «{keyword}» ничего не найдено")
-        await main_menu(message.chat.id, message.chat.first_name)
-        return
-    await state.update_data({'keyword': keyword, 'ad_index': 0})
-    await Make_search_request.next()
-
-    await bot.forward_message(message.chat.id, f'@{channel}', result[0][1])
-    await message.answer("Выберите действие", reply_markup=inline_keyboard(Buttons.on_notifications, back_data=True, arrows=True))
+        await message.reply(f"По запросу «{keyword}» ничего не найдено", reply_markup=inline_keyboard(Buttons.on_notifications, back_data=True))
 
 
 @dp.callback_query_handler(lambda callback_query: True, state=Make_search_request.view)
@@ -1130,6 +1155,7 @@ async def callback_inline(callback_query: types.CallbackQuery, state: FSMContext
         return
     data = await state.get_data()
     if callback_query.data == Buttons.arrows[0].data or callback_query.data == Buttons.arrows[1].data:
+        edit = data.get('edit')
         last_index = data['ad_index']
         keyword = data['keyword']
         conn = mysql.connector.connect(host=c.host, user=c.user, passwd=c.password, database=c.db)
@@ -1139,11 +1165,13 @@ async def callback_inline(callback_query: types.CallbackQuery, state: FSMContext
         cursor.execute(searchQuery)
         result = cursor.fetchall()
         conn.close()
-
+        if not result:
+            await callback_query.answer("Объявление не найдено", show_alert=True)
+            return
         length = len(result)
         if callback_query.data == Buttons.arrows[0].data:
             if last_index == 0 or last_index > length - 1:
-                new_index = -1
+                new_index = length - 1
             else:
                 new_index = last_index - 1
         else:
@@ -1158,16 +1186,19 @@ async def callback_inline(callback_query: types.CallbackQuery, state: FSMContext
         channel = cursor.fetchone()[0]
         conn.close()
 
-        await state.update_data({'ad_index': new_index})
-        await bot.forward_message(callback_query.message.chat.id, f'@{channel}', result[new_index][1])
-        await callback_query.message.answer("Выберите действие", reply_markup=inline_keyboard(Buttons.on_notifications, True, True))
-
-        try:
-            last_message_id = callback_query.message.message_id
-            await bot.delete_message(callback_query.message.chat.id, last_message_id)
-            await bot.delete_message(callback_query.message.chat.id, last_message_id - 1)
-        except utils.exceptions.MessageCantBeDeleted: pass
-        except utils.exceptions.MessageToDeleteNotFound: await callback_query.answer("Не нажимайте так часто!", show_alert=True)
+        await state.update_data({'ad_index': new_index, 'edit': True})
+        text = f"[Объявление](https://t.me/{channel}/{result[new_index][1]})"
+        if edit:
+            try:
+                await bot.edit_message_text(text, callback_query.message.chat.id, callback_query.message.message_id,
+                                            reply_markup=inline_keyboard(Buttons.on_notifications, back_data=True, arrows=True), parse_mode="Markdown")
+            except utils.exceptions.MessageNotModified: pass
+            except utils.exceptions.BadRequest: await callback_query.answer("Не нажимайте так часто!", show_alert=True)
+        else:
+            await bot.send_message(callback_query.message.chat.id, text,
+                                   reply_markup=inline_keyboard(Buttons.on_notifications, back_data=True, arrows=True), parse_mode="Markdown")
+            try: await bot.delete_message(callback_query.message.chat.id, callback_query.message.message_id)
+            except utils.exceptions.MessageCantBeDeleted: pass
 
     elif callback_query.data == Buttons.on_notifications.data:
         with open('prices.json', 'r') as f:
@@ -1231,14 +1262,44 @@ async def callback_inline(callback_query: types.CallbackQuery, state: FSMContext
         conn = mysql.connector.connect(host=c.host, user=c.user, passwd=c.password, database=c.db)
         cursor = conn.cursor(buffered=True)
         deleteQuery = "DELETE FROM ads WHERE ID=(%s)"
+        selectAdminsQuery = "SELECT user_id FROM admins WHERE menu_admin=1"
+        cursor.execute(selectAdminsQuery)
+        admins = cursor.fetchall()
         cursor.execute(deleteQuery, [data['ad_id']])
         conn.commit()
         conn.close()
-        await callback_query.answer("Удалено!", show_alert=True)
+        try:
+            await bot.delete_message(data['channel'], data['message_id'])
+            await callback_query.answer("Удалено!", show_alert=True)
+        except utils.exceptions.MessageToDeleteNotFound: pass
+        except utils.exceptions.MessageCantBeDeleted:
+            for admin in admins:
+                await bot.forward_message(admin[0], data['channel'], data['message_id'])
+                await bot.send_message(admin[0], "Удалите это объявление вручную")
+                await sleep(.1)
+            await callback_query.answer("Администрация скоро удалит ваше объявление!", show_alert=True)
         await my_ads(callback_query, state)
     elif callback_query.data == Buttons.confirm_delete[1].data:
         await callback_query.answer("Отменено")
         await my_ads(callback_query, state)
+    elif callback_query.data == Buttons.edit_delete_ad[0].data:
+        await My_ads.next()
+        await callback_query.message.answer("Напишите новый текст объявления")
+
+
+@dp.message_handler(content_types=['text'], state=My_ads.edit)
+async def edit_ad(message: types.Message, state: FSMContext):
+    text = await get_caption(message, message.text)
+    if not isinstance(text, str):
+        return
+    data = await state.get_data()
+    await state.finish()
+    try: await bot.edit_message_caption(data['channel'], data['message_id'], caption=text)
+    except utils.exceptions.BadRequest:
+        try: await bot.edit_message_text(text, data['channel'], data['message_id'])
+        except utils.exceptions.BadRequest: pass
+    await message.answer("Успешно изменено")
+    await main_menu(message.chat.id, message.chat.first_name)
 
 
 @dp.callback_query_handler(lambda callback_query: True, state=My_promos.view)
@@ -1249,28 +1310,30 @@ async def callback_inline(callback_query: types.CallbackQuery, state: FSMContext
         await my_promos(callback_query, state, edit=True)
 
 
+@dp.callback_query_handler(lambda callback_query: True, state=Top_up_balance.amount)
+async def callback_inline(callback_query: types.CallbackQuery, state: FSMContext):
+    if await _back(callback_query, state, main_menu, callback_query.message.chat.id, callback_query.message.chat.first_name, callback_query.message.message_id):
+        return
+
+
 @dp.message_handler(regexp='^\\d+$', state=Top_up_balance.amount)
 async def search(message: types.Message, state: FSMContext):
     amount = int(message.text)
     if amount < 1 or amount > 1000000:
         await message.reply("Недействительная сумма!")
         return
-    await state.update_data({'amount': amount})
-    await Top_up_balance.next()
+    await state.finish()
+    pay_link = pay.way_for_pay_request_purchase(message.chat.id, amount)
+    if isinstance(pay_link, tuple):
+        print("Error: %s" % pay_link[1])
+        await message.answer("Извините, произошла ошибка, повторите попытку позже")
+        await message.answer("Error: %s" % pay_link[1])
+        return
     key = types.InlineKeyboardMarkup()
-    key.add(types.InlineKeyboardButton("Оплатить", url="https://privat24.ua"))
+    key.add(types.InlineKeyboardButton("Оплатить", url=pay_link))
     key.add(types.InlineKeyboardButton(Buttons.back.title, callback_data=Buttons.back.data))
     await message.answer(f"Ваш баланс будет пополнен на {amount} грн. Чтобы оплатить используйте кнопку ниже.\n"
                          "После оплаты бот автоматически обработает платёж.", reply_markup=key)
-
-
-@dp.callback_query_handler(lambda callback_query: True, state=Top_up_balance.pay)
-async def callback_inline(callback_query: types.CallbackQuery, state: FSMContext):
-    if await _back(callback_query, state, main_menu, callback_query.message.chat.id, callback_query.message.chat.first_name, callback_query.message.message_id):
-        return
-    # ТУТ НАДО КАК-ТО ОБРАБОТАТЬ ПЛАТЁЖ
-    # НЕ ЗАБЫТЬ 50% ВЕРНУТЬ РЕФЕРАЛУ
-    pass
 
 
 @dp.callback_query_handler(lambda callback_query: True, state=Admin_privileges.user_id)
@@ -1284,9 +1347,6 @@ async def search(message: types.Message, state: FSMContext):
     forward = message.forward_from
     if not forward:
         await message.answer("Это не пересланное сообщение!")
-        return
-    if message.forward_from_chat.type != "private":
-        await message.answer("Сообщение переслано не из личного чата с пользователем!")
         return
     conn = mysql.connector.connect(host=c.host, user=c.user, passwd=c.password, database=c.db)
     cursor = conn.cursor(buffered=True)
@@ -1347,6 +1407,8 @@ async def callback_inline(callback_query: types.CallbackQuery, state: FSMContext
     if await _back(callback_query, state, admin_menu, callback_query, callback_query.message.message_id):
         return
     data = await state.get_data()
+    existsQuery = "SELECT EXISTS (SELECT ID FROM admins WHERE user_id=(%s))"
+    insertQuery = "INSERT INTO admins (user_id) VALUES (%s)"
     updateQuery = None
     if data['priv'] == 'add':
         if callback_query.data == Buttons.add_remove_all_priv[0].data:
@@ -1372,6 +1434,10 @@ async def callback_inline(callback_query: types.CallbackQuery, state: FSMContext
             updateQuery = "UPDATE admins SET priv_remove=0 WHERE user_id=(%s)"
     conn = mysql.connector.connect(host=c.host, user=c.user, passwd=c.password, database=c.db)
     cursor = conn.cursor(buffered=True)
+    cursor.execute(existsQuery, [data['priv_id']])
+    exists = cursor.fetchone()[0]
+    if not exists:
+        cursor.execute(insertQuery, [data['priv_id']])
     cursor.execute(updateQuery, [data['priv_id']])
     conn.commit()
     conn.close()
@@ -1407,9 +1473,11 @@ async def callback_inline(callback_query: types.CallbackQuery, state: FSMContext
     elif callback_query.data == Buttons.confirm_delete[0].data:
         data = await state.get_data()
         deleteQuery = "DELETE FROM channels WHERE ID=(%s)"
+        deleteAllAdsQuery = "DELETE FROM ads WHERE channel=(%s)"
         conn = mysql.connector.connect(host=c.host, user=c.user, passwd=c.password, database=c.db)
         cursor = conn.cursor(buffered=True)
         cursor.execute(deleteQuery, [data['channel_id']])
+        cursor.execute(deleteAllAdsQuery, [data['channel_id']])
         conn.commit()
         conn.close()
         await callback_query.answer("Удалено!", show_alert=True)
@@ -1453,16 +1521,13 @@ async def callback_inline(callback_query: types.CallbackQuery, state: FSMContext
 async def new_channel(message: types.Message, state: FSMContext):
     forward = message.forward_from_chat
     if not forward:
-        await message.answer("Это не пересланное сообщение!")
-        return
-    if message.forward_from_chat.type != "channel":
-        await message.answer("Сообщение переслано не с канала!")
+        await message.answer("Это не пересланное сообщение, либо переслано не с канала!")
         return
     m = await bot.get_chat_member(f'@{forward.username}', 1097976142)
     if m.status == "left":
         await message.answer("Вы не добавили бота в канал, добавьте и повторите попытку!")
         return
-    data = state.get_data()
+    data = await state.get_data()
     name, username, ch_id, prices = forward.title, forward.username, forward.id, data['prices']
     existsQuery = "SELECT EXISTS (SELECT ID FROM channels WHERE chat_id=(%s))"
     updateQuery = "UPDATE channels SET username=(%s), name=(%s), 1_day=(%s), 7_days=(%s), 14_days=(%s), 30_days=(%s) WHERE chat_id=(%s)"
@@ -1584,9 +1649,14 @@ async def search(message: types.Message, state: FSMContext):
     channel = cursor.fetchone()
     conn.close()
 
+    try:
+        await bot.forward_message(message.chat.id, f'@{channel[0]}', result[2])
+    except utils.exceptions.MessageToForwardNotFound:
+        await message.answer("Объявление не найдено на канале, поэтому сейчас удалено из базы данных")
+        delete_invalid_ad_from_db(result[2], result[1])
+        return
     await Admin_ads.next()
     await state.update_data({'ad_id': ad_id})
-    await bot.forward_message(message.chat.id, f'@{channel[0]}', result[2])
     await message.answer(
         f"ID: {ad_id}\n"
         f"Канал: {channel[1]} (@{channel[0]})\n"
@@ -1634,4 +1704,5 @@ async def callback_inline(callback_query: types.CallbackQuery, state: FSMContext
 
 
 if __name__ == "__main__":
+    #dp.loop.create_task(expired_ads_checker.loop_check())
     executor.start_polling(dp, skip_updates=True)

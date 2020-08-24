@@ -23,6 +23,7 @@ class Buttons:
     on_notifications = Button('Включить оповещения для фразы', 'on_notify')
     pay_confirm = Button('Подтвердить оплату', 'confirm')
     delete_ad = Button('Удалить объявление', 'delete_ad')
+    edit_delete_ad = Button('Изменить объявление', 'edit_ad'), Button('Удалить объявление', 'delete_ad')
     confirm_delete = Button('Да, удалить', 'delete_ad_confirm'), Button('Нет, отменить', 'delete_back')
     admin = \
         Button('Привилегии', 'admin_privileges'), \
@@ -41,4 +42,3 @@ class Buttons:
     admin_settings = Button('1', 'set_1'), Button('2', 'set_2'), Button('3', 'set_3'), Button('4', 'set_4')
     admin_promo = Button('Одобрить', 'approve'), Button('Отклонить', 'reject')
     report = Button('Жалоба', 'report')
-    report_media_group = Button('Жалоба', 'report_mg')
