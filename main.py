@@ -514,10 +514,9 @@ async def referrals(callback_query):
         cursor.execute(selectBonusQuery, [callback_query.message.chat.id])
         bonus = cursor.fetchone()[0]
     conn.close()
-    await callback_query.message.answer(f"*Ваша реферальная ссылка:*\n"
-                                        f"`https://t.me/AdvancedAdsBot?start=ref{callback_query.message.chat.id}`\n"
-                                        f"*Приглашено пользователей:* {num}\n*Заработано бонусов:* {bonus} грн.",
+    await callback_query.message.answer(f"*Приглашено пользователей:* {num}\n*Заработано бонусов:* {bonus} грн.\n*Ваша реферальная ссылка:*\n",
                                         parse_mode="Markdown", reply_markup=inline_keyboard(Buttons.back))
+    await callback_query.message.answer(f"https://t.me/AdvancedAdsBot?start=ref{callback_query.message.chat.id}")
     try: await bot.delete_message(callback_query.message.chat.id, callback_query.message.message_id)
     except utils.exceptions.MessageCantBeDeleted: pass
 
@@ -590,20 +589,23 @@ async def admin_channels(callback_query, state):
 async def admin_settings(callback_query):
     with open('prices.json', 'r') as f:
         data = json.load(f)
-    key = types.InlineKeyboardMarkup()
+    key = types.InlineKeyboardMarkup(6)
     but_1 = types.InlineKeyboardButton(Buttons.admin_settings[0].title, callback_data=Buttons.admin_settings[0].data)
     but_2 = types.InlineKeyboardButton(Buttons.admin_settings[1].title, callback_data=Buttons.admin_settings[1].data)
     but_3 = types.InlineKeyboardButton(Buttons.admin_settings[2].title, callback_data=Buttons.admin_settings[2].data)
     but_4 = types.InlineKeyboardButton(Buttons.admin_settings[3].title, callback_data=Buttons.admin_settings[3].data)
-    key.add(but_1, but_2)
-    key.add(but_3, but_4)
+    but_5 = types.InlineKeyboardButton(Buttons.admin_settings[4].title, callback_data=Buttons.admin_settings[4].data)
+    but_6 = types.InlineKeyboardButton(Buttons.admin_settings[5].title, callback_data=Buttons.admin_settings[5].data)
+    key.add(but_1, but_2, but_3, but_4, but_5, but_6)
     key.add(types.InlineKeyboardButton(Buttons.back.title, callback_data=Buttons.back.data))
     await Admin_settings.select.set()
     await callback_query.message.answer("Выберите что изменить:\n"
                                         "1. Цена за 1000 просмотров рекламы: {views[_1000]} грн.\n"
                                         "2. Цена за 5000 просмотров рекламы: {views[_5000]} грн.\n"
                                         "3. Цена за подписку на оповещения: {notify} грн.\n"
-                                        "4. Оплата за просмотр рекламы: {ad_view} грн.".format(**data), reply_markup=key)
+                                        "4. Оплата за просмотр рекламы: {ad_view} грн.\n"
+                                        "5. Жалоб для удаления через админа: {ban[0]}\n"
+                                        "6. Жалоб для автоудаления: {ban[1]}".format(**data), reply_markup=key)
     try: await bot.delete_message(callback_query.message.chat.id, callback_query.message.message_id)
     except utils.exceptions.MessageCantBeDeleted: pass
 
@@ -694,8 +696,10 @@ async def report_send(callback_query):
     cursor.executemany(selectQuery, [(channel, message_id)])
     rep_num = cursor.fetchone()[0]
     admins = None
-    ban_admin = 5  # количество для уведомления админа
-    ban_auto = 10  # количество для автоматического удаления
+    with open('prices.json', 'r') as f:
+        ban = json.load(f)['ban']
+    ban_admin = ban[0]  # количество для уведомления админа
+    ban_auto = ban[1]  # количество для автоматического удаления
     if rep_num < ban_admin or ban_auto > rep_num > ban_admin:  # количество игнорирования
         cursor.executemany(insertQuery, [(channel, message_id, callback_query.from_user.id)])
     elif rep_num == ban_admin:
@@ -1568,13 +1572,9 @@ async def callback_inline(callback_query: types.CallbackQuery, state: FSMContext
         return
 
 
-@dp.message_handler(content_types=['text'], state=Admin_settings.edit)
+@dp.message_handler(regexp='^\\d+$', state=Admin_settings.edit)
 async def new_prices(message: types.Message, state: FSMContext):
-    text = str(message.text)
-    if not text.isdigit():
-        await message.answer("Это не число, повторите попытку")
-        return
-    text = int(text)
+    text = int(message.text)
     data = await state.get_data()
     setting = data['set']
     with open('prices.json', 'r') as f:
@@ -1587,6 +1587,10 @@ async def new_prices(message: types.Message, state: FSMContext):
         prices['notify'] = text
     elif setting == Buttons.admin_settings[3].data:
         prices['ad_view'] = text
+    elif setting == Buttons.admin_settings[4].data:
+        prices['ban'][0] = text
+    elif setting == Buttons.admin_settings[5].data:
+        prices['ban'][1] = text
     with open('prices.json', 'wt') as f:
         json.dump(prices, f, ensure_ascii=False, indent=2)
     await state.finish()
