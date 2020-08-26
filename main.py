@@ -24,7 +24,8 @@ dp = Dispatcher(bot, storage=storage)
 class Channels(StatesGroup):
     choose = State()
     place_ad = State()
-    media_text = State()
+    media = State()
+    text = State()
     period_confirm = State()
 
 
@@ -33,7 +34,8 @@ class Watch_promo(StatesGroup):
 
 
 class Make_promo(StatesGroup):
-    media_text = State()
+    media = State()
+    text = State()
     views_confirm = State()
 
 
@@ -81,6 +83,57 @@ class Admin_ads(StatesGroup):
     back_or_delete = State()
 
 
+@dp.message_handler(regexp=Buttons.reply_restart)
+async def restart(message: types.Message):
+    await main_menu(message.chat.id, message.chat.first_name)
+
+
+@dp.message_handler(regexp=Buttons.reply_restart, state=Channels)
+async def restart(message: types.Message, state: FSMContext):
+    await state.finish()
+    await main_menu(message.chat.id, message.chat.first_name)
+
+
+@dp.message_handler(regexp=Buttons.reply_restart, state=Watch_promo)
+async def restart(message: types.Message, state: FSMContext):
+    await state.finish()
+    await main_menu(message.chat.id, message.chat.first_name)
+
+
+@dp.message_handler(regexp=Buttons.reply_restart, state=Make_promo)
+async def restart(message: types.Message, state: FSMContext):
+    await state.finish()
+    await main_menu(message.chat.id, message.chat.first_name)
+
+
+@dp.message_handler(regexp=Buttons.reply_restart, state=Make_search_request)
+async def restart(message: types.Message, state: FSMContext):
+    await state.finish()
+    await main_menu(message.chat.id, message.chat.first_name)
+
+
+@dp.message_handler(regexp=Buttons.reply_restart, state=My_ads)
+async def restart(message: types.Message, state: FSMContext):
+    await state.finish()
+    await main_menu(message.chat.id, message.chat.first_name)
+
+
+@dp.message_handler(regexp=Buttons.reply_restart, state=My_promos)
+async def restart(message: types.Message, state: FSMContext):
+    await state.finish()
+    await main_menu(message.chat.id, message.chat.first_name)
+
+
+@dp.message_handler(regexp=Buttons.reply_restart, state=Top_up_balance)
+async def restart(message: types.Message, state: FSMContext):
+    await state.finish()
+    await main_menu(message.chat.id, message.chat.first_name)
+
+
+def reply_back_button():
+    key = types.ReplyKeyboardMarkup(resize_keyboard=True)
+    key.add(Buttons.reply_restart)
+    return key
 
 
 def inline_keyboard(buttons_set, back_data=False, arrows=False):
@@ -168,6 +221,7 @@ async def main_menu(user_id, first_name, delete_message=None, referral=None):
     if admin:
         buttons += (Buttons.main_admin.title, Buttons.main_admin.data),
     key = inline_keyboard(buttons)
+    await bot.send_message(user_id, 'Главное меню', reply_markup=reply_back_button())
     await bot.send_message(user_id, f"Здравствуйте, {first_name}.\nНа вашем балансе: {balance} грн.", reply_markup=key)
     if delete_message:
         try: await bot.delete_message(user_id, delete_message)
@@ -272,7 +326,7 @@ async def send_promo(callback_query, promo, edit=True, single=False, key=None, p
             else:
                 await bot.send_message(callback_query.message.chat.id, text, reply_markup=key, parse_mode=parse_mode)
                 await bot.delete_message(callback_query.message.chat.id, callback_query.message.message_id)
-    except utils.exceptions.MessageNotModified: pass
+    except utils.exceptions.MessageNotModified: await callback_query.answer()
     except utils.exceptions.BadRequest: await callback_query.answer("Не нажимайте так часто!", show_alert=True)
 
 
@@ -343,9 +397,9 @@ async def watch_proms(callback_query, state, arrow=None):
 
 
 async def make_promo(callback_query):
-    await Make_promo.media_text.set()
+    await Make_promo.media.set()
     await callback_query.answer()
-    await callback_query.message.answer("Отправьте/перешлите фото или видео с подписью")
+    await callback_query.message.answer("Отправьте/перешлите фото или видео")
 
 
 async def search_choose_option(callback_query):
@@ -436,7 +490,7 @@ async def my_ads(callback_query, state, edit=True):
         try:
             await bot.edit_message_text(text, callback_query.message.chat.id, callback_query.message.message_id,
                                         reply_markup=inline_keyboard(buttons_cortege(Buttons.edit_delete_ad), back_data=True, arrows=True), parse_mode="Markdown")
-        except utils.exceptions.MessageNotModified: pass
+        except utils.exceptions.MessageNotModified: await callback_query.answer()
         except utils.exceptions.BadRequest: await callback_query.answer("Не нажимайте так часто!", show_alert=True)
     else:
         await bot.send_message(callback_query.message.chat.id, text,
@@ -489,7 +543,7 @@ async def my_promos(callback_query, state, edit=False):
                 await bot.edit_message_media(types.InputMediaVideo(result[new_index][4], caption=text), callback_query.message.chat.id, callback_query.message.message_id, reply_markup=key)
             else:
                 await bot.edit_message_text(text, callback_query.message.chat.id, callback_query.message.message_id, reply_markup=key)
-        except utils.exceptions.MessageNotModified: pass
+        except utils.exceptions.MessageNotModified: await callback_query.answer()
         except utils.exceptions.BadRequest: await callback_query.answer("Не нажимайте так часто!", show_alert=True)
     else:
         if result[new_index][3]:
@@ -582,7 +636,7 @@ async def admin_channels(callback_query, state):
     else:
         try:
             await bot.edit_message_text(text, callback_query.message.chat.id, callback_query.message.message_id, reply_markup=key)
-        except utils.exceptions.MessageNotModified: pass
+        except utils.exceptions.MessageNotModified: await callback_query.answer()
         except utils.exceptions.BadRequest: await callback_query.answer("Не нажимайте так часто!", show_alert=True)
 
 
@@ -846,7 +900,7 @@ async def callback_inline(callback_query: types.CallbackQuery, state: FSMContext
 async def channels_place_ad(callback_query):
     await Channels.next()
     await callback_query.answer()
-    await callback_query.message.answer("Отправьте/перешлите фото, видео или альбом с подписью")
+    await callback_query.message.answer("Отправьте/перешлите фото, видео или альбом")
 
 
 @dp.callback_query_handler(lambda callback_query: True, state=Channels.place_ad)
@@ -909,32 +963,35 @@ async def period_and_confirm(message, state, period=None, callback_query=None):
                 await bot.edit_message_caption(message.chat.id, message.message_id, caption=text, reply_markup=key)
             else:
                 await bot.edit_message_text(text, message.chat.id, message.message_id, reply_markup=key)
-        except utils.exceptions.MessageNotModified: pass
+        except utils.exceptions.MessageNotModified: await callback_query.answer()
         except utils.exceptions.BadRequest: await callback_query.answer("Не нажимайте так часто!", show_alert=True)
 
 
-@dp.message_handler(content_types=['text', 'photo', 'video'], state=Channels.media_text)
+@dp.message_handler(content_types=['photo', 'video'], state=Channels.media)
 async def media_text(message: types.Message, state: FSMContext):
-    text = photo = video = None
+    photo = video = None
     if message.media_group_id:
         data = await media_group.media_group(message, state)
         if data is None: return
         await state.update_data({'media_group': True})
-        text = await get_caption(message, data['media_group']['caption'])
         photo = data['media_group']['photo']
         video = data['media_group']['video']
     elif message.photo:
-        text = await get_caption(message, message.caption)
         photo = message.photo[-1].file_id
     elif message.video:
-        text = await get_caption(message, message.caption)
         video = message.video.file_id
-    elif message.text:
-        text = await get_caption(message, message.text)
+    await state.update_data({'media': {'photo': photo, 'video': video}})
+    await Channels.next()
+    await message.answer("Отправьте/перешлите текст объявления")
+
+
+@dp.message_handler(content_types=['text'], state=Channels.text)
+async def media_text(message: types.Message, state: FSMContext):
+    text = await get_caption(message, message.text)
     if not text:
-        await state.update_data({'media_group': dict()})
         return
-    await state.update_data({'media': {'caption': text, 'photo': photo, 'video': video}})
+    data = await state.get_data()
+    await state.update_data({'media': {'photo': data['media']['photo'], 'video': data['media']['video'], 'caption': text}})
     await period_and_confirm(message, state)
 
 
@@ -1069,20 +1126,25 @@ async def views_and_confirm(message, state, views=None, price=None, callback_que
         await bot.edit_message_caption(message.chat.id, message.message_id, caption=text, reply_markup=key)
 
 
-@dp.message_handler(content_types=['text', 'photo', 'video'], state=Make_promo.media_text)
+@dp.message_handler(content_types=['photo', 'video'], state=Make_promo.media)
 async def media_text(message: types.Message, state: FSMContext):
-    text = photo = video = None
+    photo = video = None
     if message.photo:
-        text = await get_caption(message, message.caption)
         photo = message.photo[-1].file_id
     elif message.video:
-        text = await get_caption(message, message.caption)
         video = message.video.file_id
-    elif message.text:
-        text = message.text
+    await state.update_data({'media': {'photo': photo, 'video': video}})
+    await Make_promo.next()
+    await message.answer("Отправьте/перешлите текст объявления")
+
+
+@dp.message_handler(content_types=['text'], state=Make_promo.text)
+async def media_text(message: types.Message, state: FSMContext):
+    text = await get_caption(message, message.text)
     if not text:
         return
-    await state.update_data({'media': {'caption': text, 'photo': photo, 'video': video}})
+    data = await state.get_data()
+    await state.update_data({'media': {'photo': data['media']['photo'], 'video': data['media']['video'], 'caption': text}})
     await views_and_confirm(message, state)
 
 
@@ -1196,7 +1258,7 @@ async def callback_inline(callback_query: types.CallbackQuery, state: FSMContext
             try:
                 await bot.edit_message_text(text, callback_query.message.chat.id, callback_query.message.message_id,
                                             reply_markup=inline_keyboard(Buttons.on_notifications, back_data=True, arrows=True), parse_mode="Markdown")
-            except utils.exceptions.MessageNotModified: pass
+            except utils.exceptions.MessageNotModified: await callback_query.answer()
             except utils.exceptions.BadRequest: await callback_query.answer("Не нажимайте так часто!", show_alert=True)
         else:
             await bot.send_message(callback_query.message.chat.id, text,

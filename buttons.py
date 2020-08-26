@@ -45,3 +45,4 @@ class Buttons:
         Button('5', 'set_5'), Button('6', 'set_6')
     admin_promo = Button('Одобрить', 'approve'), Button('Отклонить', 'reject')
     report = Button('Жалоба', 'report')
+    reply_restart = '⬅ Назад'
