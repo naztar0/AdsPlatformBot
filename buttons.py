@@ -14,7 +14,7 @@ class Buttons:
     back_to_menu = Button('Вернуться в главное меню', 'main_menu')
     back = Button('Назад', 'back')
     to_channel = ('Перейти в канал', 'Разместить объявление')
-    make_ad = Button('Оплатить и разместить', 'confirm'),  Button('1 день', '1'), Button('7 дней', '7'),  Button('14 дней', '14'), Button('30 дней', '30')
+    make_ad = Button('ОПЛАТИТЬ И РАЗМЕСТИТЬ', 'confirm'),  Button('1 день', '1'), Button('7 дней', '7'),  Button('14 дней', '14'), Button('30 дней', '30')
     make_promo = Button('Просмотреть рекламу', 'watch_promo'),  Button('Создать рекламу', 'create_promo')
     arrows = Button('⬅', 'prev'), Button('➡', 'next')
     watch_promo = Button('Просмотреть', 'view_confirm')
@@ -23,7 +23,6 @@ class Buttons:
     on_notifications = Button('Включить оповещения для фразы', 'on_notify')
     pay_confirm = Button('Подтвердить оплату', 'confirm')
     delete_ad = Button('Удалить объявление', 'delete_ad')
-    edit_delete_ad = Button('Изменить объявление', 'edit_ad'), Button('Удалить объявление', 'delete_ad')
     confirm_delete = Button('Да, удалить', 'delete_ad_confirm'), Button('Нет, отменить', 'delete_back')
     admin = \
         Button('Привилегии', 'admin_privileges'), \
@@ -46,3 +45,5 @@ class Buttons:
     admin_promo = Button('Одобрить', 'approve'), Button('Отклонить', 'reject')
     report = Button('Жалоба', 'report')
     reply_restart = '⬅ Назад'
+    reply_request_contact = 'Поделиться контактом'
+    reply_request_location = 'Поделиться местоположением'

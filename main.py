@@ -4,6 +4,7 @@ from buttons import Buttons, Button
 import pay
 import media_group
 import expired_ads_checker
+import get_location_names
 import datetime
 import json
 import time
@@ -19,6 +20,10 @@ import mysql.connector
 bot = Bot(c.token)
 storage = MemoryStorage()
 dp = Dispatcher(bot, storage=storage)
+
+
+class User_private_data(StatesGroup):
+    location = State()
 
 
 class Channels(StatesGroup):
@@ -47,6 +52,7 @@ class Make_search_request(StatesGroup):
 class My_ads(StatesGroup):
     view = State()
     edit = State()
+    delete = State()
 
 
 class My_promos(StatesGroup):
@@ -81,11 +87,6 @@ class Admin_promo(StatesGroup):
 class Admin_ads(StatesGroup):
     ad_id = State()
     back_or_delete = State()
-
-
-@dp.message_handler(regexp=Buttons.reply_restart)
-async def restart(message: types.Message):
-    await main_menu(message.chat.id, message.chat.first_name)
 
 
 @dp.message_handler(regexp=Buttons.reply_restart, state=Channels)
@@ -128,12 +129,6 @@ async def restart(message: types.Message, state: FSMContext):
 async def restart(message: types.Message, state: FSMContext):
     await state.finish()
     await main_menu(message.chat.id, message.chat.first_name)
-
-
-def reply_back_button():
-    key = types.ReplyKeyboardMarkup(resize_keyboard=True)
-    key.add(Buttons.reply_restart)
-    return key
 
 
 def inline_keyboard(buttons_set, back_data=False, arrows=False):
@@ -187,27 +182,66 @@ def _media_group_builder(data, caption=True):
     return media
 
 
-def register_user(user_id, referral=None):
+def register_user(user_id, phone, location, referral=None):
     conn = mysql.connector.connect(host=c.host, user=c.user, passwd=c.password, database=c.db)
     cursor = conn.cursor(buffered=True)
-    if referral:
-        insertQuery = "INSERT INTO users (user_id, referral) VALUES (%s, %s)"
-        cursor.executemany(insertQuery, [(user_id, referral)])
-    else:
-        insertQuery = "INSERT INTO users (user_id) VALUES (%s)"
-        cursor.execute(insertQuery, [user_id])
+    insertQuery = "INSERT INTO users (user_id, phone, location, referral) VALUES (%s, %s, %s, %s)"
+    cursor.executemany(insertQuery, [(user_id, phone, location, referral)])
     conn.commit()
     conn.close()
 
 
-async def main_menu(user_id, first_name, delete_message=None, referral=None):
+async def request_contact(user_id, first_name):
+    key = types.ReplyKeyboardMarkup(resize_keyboard=True)
+    key.add(types.KeyboardButton(Buttons.reply_request_contact, request_contact=True))
+    await bot.send_message(user_id, f"Здравствуйте, {first_name}.\n"
+                           "Для продолжения, пожалуйста, предоставьте ваш номер телефона при помощи кнопки внизу",
+                           reply_markup=key)
+
+
+@dp.message_handler(content_types=['contact'])
+async def contact_func(message: types.Message, state: FSMContext):
+    conn = mysql.connector.connect(host=c.host, user=c.user, passwd=c.password, database=c.db)
+    cursor = conn.cursor(buffered=True)
+    existsQuery = "SELECT EXISTS (SELECT ID FROM users WHERE user_id=(%s))"
+    cursor.execute(existsQuery, [message.chat.id])
+    exists = cursor.fetchone()[0]
+    conn.close()
+    if exists:
+        return
+    country_code = str(message.contact.phone_number)[:-9]
+    if '380' not in country_code:
+        await message.reply("Похоже, номер телефона не украинский. Использование бота разрешено только пользователям из Украины.")
+        return
+    await state.update_data({'phone': str(message.contact.phone_number)[-10:]})
+    key = types.ReplyKeyboardMarkup(resize_keyboard=True)
+    key.add(types.KeyboardButton(Buttons.reply_request_location, request_location=True))
+    await User_private_data.location.set()
+    await message.answer("Отлично, теперь предоставьте ваше местоположение при помощи кнопки внизу", reply_markup=key)
+
+
+@dp.message_handler(content_types=['location'], state=User_private_data.location)
+async def location_func(message: types.Message, state: FSMContext):
+    location = get_location_names.get_location(message.location.latitude, message.location.longitude, lang='ru')
+    if location is None:
+        await message.reply("Ошибка распознавания местоположения")
+        return
+    elif location == 0:
+        await message.reply("Похоже, вы находитесь не в Украине. Использование бота разрешено только пользователям из Украины.")
+        return
+    data = await state.get_data()
+    await state.finish()
+    register_user(message.chat.id, data['phone'], location, data.get('referral'))
+    await main_menu(message.chat.id, message.chat.first_name)
+
+
+async def main_menu(user_id, first_name, delete_message=None, referral=None, state=None):
     conn = mysql.connector.connect(host=c.host, user=c.user, passwd=c.password, database=c.db)
     cursor = conn.cursor(buffered=True)
     selectQuery = "SELECT balance FROM users WHERE user_id=(%s)"
     selectAdminQuery = "SELECT ID FROM admins WHERE user_id=(%s) AND menu_admin=1"
     cursor.execute(selectQuery, [user_id])
     result = cursor.fetchone()
-    admin = False
     if result:
         balance = result[0]
         cursor.execute(selectAdminQuery, [user_id])
@@ -215,14 +249,17 @@ async def main_menu(user_id, first_name, delete_message=None, referral=None):
         conn.close()
     else:
         conn.close()
-        register_user(user_id, referral)
-        balance = 0
+        if referral:
+            await state.update_data({'referral': referral})
+        await request_contact(user_id, first_name)
+        return
     buttons = buttons_cortege(Buttons.main)
     if admin:
         buttons += (Buttons.main_admin.title, Buttons.main_admin.data),
-    key = inline_keyboard(buttons)
-    await bot.send_message(user_id, 'Главное меню', reply_markup=reply_back_button())
-    await bot.send_message(user_id, f"Здравствуйте, {first_name}.\nНа вашем балансе: {balance} грн.", reply_markup=key)
+    key = types.ReplyKeyboardMarkup(resize_keyboard=True)
+    key.add(types.KeyboardButton(Buttons.reply_restart))
+    await bot.send_message(user_id, "Главное меню", reply_markup=key)
+    await bot.send_message(user_id, f"Здравствуйте, {first_name}.\nНа вашем балансе: {balance} грн.", reply_markup=inline_keyboard(buttons))
     if delete_message:
         try: await bot.delete_message(user_id, delete_message)
         except utils.exceptions.MessageCantBeDeleted: pass
@@ -236,13 +273,13 @@ async def admin_menu(callback_query, delete_message=None):
 
 
 @dp.message_handler(commands=['start'])
-async def start(message: types.Message):
+async def start(message: types.Message, state: FSMContext):
     referral = None
     if "ref" in message.text:
         referral = str(message.text)[10:]
         if referral == message.chat.id:
             referral = None
-    await main_menu(message.chat.id, message.chat.first_name, referral=referral)
+    await main_menu(message.chat.id, message.chat.first_name, referral=referral, state=state)
 
 
 async def check_search_requests(text, message_id, channel):
@@ -435,68 +472,54 @@ async def search_make_requests(callback_query):
     except utils.exceptions.MessageCantBeDeleted: pass
 
 
-async def my_ads(callback_query, state, edit=True):
-    data = await state.get_data()
-    last_index = data.get('ad_index')
+async def my_ads(callback_query):
     conn = mysql.connector.connect(host=c.host, user=c.user, passwd=c.password, database=c.db)
     cursor = conn.cursor(buffered=True)
     selectQuery = "SELECT channel, message_id, ID, created, period FROM ads WHERE user_id=(%s)"
     selectChannelQuery = "SELECT username, name, chat_id FROM channels WHERE ID=(%s)"
     cursor.execute(selectQuery, [callback_query.message.chat.id])
-    result = cursor.fetchall()
-    conn.close()
-    if not result:
+    results = cursor.fetchall()
+    if not results:
+        conn.close()
         await callback_query.answer("У вас нет ни одного объявления!")
         return
-
-    new_index = 0
-    if last_index is not None:
-        length = len(result)
-        if callback_query.data == Buttons.arrows[0].data:
-            if last_index == 0 or last_index > length - 1:
-                new_index = length - 1
-            else:
-                new_index = last_index - 1
-        else:
-            if last_index >= length - 1:
-                new_index = 0
-            else:
-                new_index = last_index + 1
-    else:
-        await My_ads.view.set()
-
-    conn = mysql.connector.connect(host=c.host, user=c.user, passwd=c.password, database=c.db)
-    cursor = conn.cursor(buffered=True)
-    try:
-        cursor.execute(selectChannelQuery, [result[new_index][0]])
-    except IndexError:
-        conn.close()
-        await callback_query.answer("Не нажимайте так часто!", show_alert=True)
-        return
-    channel = cursor.fetchone()
+    channels = {x[0] for x in results}
+    usernames = {}
+    for ch in channels:
+        cursor.execute(selectChannelQuery, [ch])
+        usernames[ch] = cursor.fetchone()
     conn.close()
 
-    await state.update_data({'ad_index': new_index, 'ad_id': result[new_index][2], 'channel': channel[2], 'message_id': result[new_index][1]})
-    format_channel_name = str(channel[1]).replace('_', '\\_').replace('*', '\\*').replace('`', '\\`').replace('[', '\\[')
-    format_channel_username = str(channel[0]).replace('_', '\\_')
-    text = \
-        f"[Объявление](https://t.me/{channel[0]}/{result[new_index][1]}) №{result[new_index][2]}\n" \
-        f"Канал: {format_channel_name} (@{format_channel_username})\n" \
-        f"Создано: {datetime.datetime.strftime(result[new_index][3], '%d.%m.%Y')}\n" \
-        f"Длительность: {result[new_index][4]} дней\n" \
-        f"Активно до: {datetime.datetime.strftime(result[new_index][3] + datetime.timedelta(result[new_index][4]), '%d.%m.%Y')}"
+    for ad in results:
+        format_channel_name = str(usernames[ad[0]][1]).replace('_', '\\_').replace('*', '\\*').replace('`', '\\`').replace('[', '\\[')
+        format_channel_username = str(usernames[ad[0]][0]).replace('_', '\\_')
+        text = \
+            f"[Объявление](https://t.me/{usernames[ad[0]][0]}/{ad[1]}) №{ad[2]}\n" \
+            f"Канал: {format_channel_name} (@{format_channel_username})\n" \
+            f"Создано: {datetime.datetime.strftime(ad[3], '%d.%m.%Y')}\n" \
+            f"Длительность: {ad[4]} дней\n" \
+            f"Активно до: {datetime.datetime.strftime(ad[3] + datetime.timedelta(ad[4]), '%d.%m.%Y')}"
+        key = types.InlineKeyboardMarkup()
+        key.add(types.InlineKeyboardButton('Изменить объявление', callback_data=f'editAd_{usernames[ad[0]][2]}_{ad[1]}'))
+        key.add(types.InlineKeyboardButton('Удалить объявление', callback_data=f'delAd_{usernames[ad[0]][2]}_{ad[1]}_{ad[2]}'))
+        await bot.send_message(callback_query.message.chat.id, text, reply_markup=key, parse_mode="Markdown")
+        await sleep(.05)
 
-    if edit:
-        try:
-            await bot.edit_message_text(text, callback_query.message.chat.id, callback_query.message.message_id,
-                                        reply_markup=inline_keyboard(buttons_cortege(Buttons.edit_delete_ad), back_data=True, arrows=True), parse_mode="Markdown")
-        except utils.exceptions.MessageNotModified: await callback_query.answer()
-        except utils.exceptions.BadRequest: await callback_query.answer("Не нажимайте так часто!", show_alert=True)
-    else:
-        await bot.send_message(callback_query.message.chat.id, text,
-                               reply_markup=inline_keyboard(buttons_cortege(Buttons.edit_delete_ad), back_data=True, arrows=True), parse_mode="Markdown")
-        try: await bot.delete_message(callback_query.message.chat.id, callback_query.message.message_id)
-        except utils.exceptions.MessageCantBeDeleted: pass
+
+async def edit_ad(callback_query, state):
+    data = str(callback_query.data).split('_')
+    await My_ads.edit.set()
+    await state.update_data({'channel': data[1], 'message_id': data[2]})
+    await callback_query.message.answer("Напишите новый текст объявления")
+
+
+async def delete_ad(callback_query, state):
+    data = str(callback_query.data).split('_')
+    await My_ads.delete.set()
+    await state.update_data({'channel': data[1], 'message_id': data[2], 'ad_id': data[3]})
+    await callback_query.message.answer(
+        f"Вы уверены что хотите удалить объявление №{data[3]} ?\nДеньги за объявление не будут возвращены.",
+        reply_markup=inline_keyboard(buttons_cortege(Buttons.confirm_delete)))
 
 
 async def my_promos(callback_query, state, edit=False):
@@ -774,8 +797,8 @@ async def report_send(callback_query):
     await callback_query.answer("Жалоба на объявление отправлена", show_alert=True)
     if admins:
         key = types.InlineKeyboardMarkup()
-        but_1 = types.InlineKeyboardButton('Удалить', callback_data=f'del_{channel}_{callback_query.message.chat.id}_{message_id}')
-        but_2 = types.InlineKeyboardButton('Оставить', callback_data='del')
+        but_1 = types.InlineKeyboardButton('Удалить', callback_data=f'delRep_{channel}_{callback_query.message.chat.id}_{message_id}')
+        but_2 = types.InlineKeyboardButton('Оставить', callback_data='delRep')
         key.add(but_1, but_2)
         for admin in admins:
             await bot.forward_message(admin[0], callback_query.message.chat.id, message_id)
@@ -828,7 +851,7 @@ async def callback_inline(callback_query: types.CallbackQuery, state: FSMContext
     elif callback_query.data == Buttons.main[2].data:
         await search_choose_option(callback_query)
     elif callback_query.data == Buttons.main[3].data:
-        await my_ads(callback_query, state, False)
+        await my_ads(callback_query)
     elif callback_query.data == Buttons.main[4].data:
         await my_promos(callback_query, state)
     elif callback_query.data == Buttons.main[5].data:
@@ -860,8 +883,13 @@ async def callback_inline(callback_query: types.CallbackQuery, state: FSMContext
 
     elif callback_query.data == Buttons.report.data:
         await report_send(callback_query)
-    elif callback_query.data[:3] == 'del':
+    elif callback_query.data[:3] == 'delRep':
         await admin_delete_message(callback_query)
+
+    elif callback_query.data[:6] == 'editAd':
+        await edit_ad(callback_query, state)
+    elif callback_query.data[:5] == 'delAd':
+        await delete_ad(callback_query, state)
 
 
 
@@ -1304,27 +1332,26 @@ async def callback_inline(callback_query: types.CallbackQuery, state: FSMContext
         except utils.exceptions.MessageCantBeDeleted: pass
 
 
-@dp.callback_query_handler(lambda callback_query: True, state=My_ads.view)
-async def callback_inline(callback_query: types.CallbackQuery, state: FSMContext):
-    if await _back(callback_query, state, main_menu, callback_query.message.chat.id, callback_query.message.chat.first_name, callback_query.message.message_id):
-        try: await bot.delete_message(callback_query.message.chat.id, callback_query.message.message_id - 1)
-        except utils.exceptions.MessageCantBeDeleted: pass
-        except utils.exceptions.MessageToDeleteNotFound: pass
+@dp.message_handler(content_types=['text'], state=My_ads.edit)
+async def message_handler(message: types.Message, state: FSMContext):
+    text = await get_caption(message, message.text)
+    if not isinstance(text, str):
         return
-    if callback_query.data == Buttons.arrows[0].data or callback_query.data == Buttons.arrows[1].data:
-        await my_ads(callback_query, state)
-    elif callback_query.data == Buttons.delete_ad.data:
+    data = await state.get_data()
+    await state.finish()
+    try: await bot.edit_message_caption(data['channel'], data['message_id'], caption=text)
+    except utils.exceptions.BadRequest:
+        try: await bot.edit_message_text(text, data['channel'], data['message_id'])
+        except utils.exceptions.BadRequest: pass
+    await message.answer("Успешно изменено")
+    await main_menu(message.chat.id, message.chat.first_name)
+
+
+@dp.callback_query_handler(lambda callback_query: True, state=My_ads.delete)
+async def callback_inline(callback_query: types.CallbackQuery, state: FSMContext):
+    if callback_query.data == Buttons.confirm_delete[0].data:
         data = await state.get_data()
-        await callback_query.message.answer(f"Вы уверены что хотите удалить объявление №{data['ad_id']} ?\nДеньги за объявление не будут возвращены.",
-                                            reply_markup=inline_keyboard(buttons_cortege(Buttons.confirm_delete)))
-        try:
-            last_message_id = callback_query.message.message_id
-            await bot.delete_message(callback_query.message.chat.id, last_message_id)
-            await bot.delete_message(callback_query.message.chat.id, last_message_id - 1)
-        except utils.exceptions.MessageCantBeDeleted: pass
-        except utils.exceptions.MessageToDeleteNotFound: pass
-    elif callback_query.data == Buttons.confirm_delete[0].data:
-        data = await state.get_data()
+        await state.finish()
         conn = mysql.connector.connect(host=c.host, user=c.user, passwd=c.password, database=c.db)
         cursor = conn.cursor(buffered=True)
         deleteQuery = "DELETE FROM ads WHERE ID=(%s)"
@@ -1344,28 +1371,11 @@ async def callback_inline(callback_query: types.CallbackQuery, state: FSMContext
                 await bot.send_message(admin[0], "Удалите это объявление вручную")
                 await sleep(.1)
             await callback_query.answer("Администрация скоро удалит ваше объявление!", show_alert=True)
-        await my_ads(callback_query, state)
+        await main_menu(callback_query.message.chat.id, callback_query.message.chat.first_name)
     elif callback_query.data == Buttons.confirm_delete[1].data:
+        await state.finish()
         await callback_query.answer("Отменено")
-        await my_ads(callback_query, state)
-    elif callback_query.data == Buttons.edit_delete_ad[0].data:
-        await My_ads.next()
-        await callback_query.message.answer("Напишите новый текст объявления")
-
-
-@dp.message_handler(content_types=['text'], state=My_ads.edit)
-async def edit_ad(message: types.Message, state: FSMContext):
-    text = await get_caption(message, message.text)
-    if not isinstance(text, str):
-        return
-    data = await state.get_data()
-    await state.finish()
-    try: await bot.edit_message_caption(data['channel'], data['message_id'], caption=text)
-    except utils.exceptions.BadRequest:
-        try: await bot.edit_message_text(text, data['channel'], data['message_id'])
-        except utils.exceptions.BadRequest: pass
-    await message.answer("Успешно изменено")
-    await main_menu(message.chat.id, message.chat.first_name)
+        await main_menu(callback_query.message.chat.id, callback_query.message.chat.first_name)
 
 
 @dp.callback_query_handler(lambda callback_query: True, state=My_promos.view)
