@@ -1,6 +1,7 @@
 #!/usr/bin/env python
 import constants as c
 from buttons import Buttons, Button
+from database_connection import DatabaseConnection
 import pay
 import media_group
 import expired_ads_checker
@@ -15,7 +16,6 @@ from aiogram.dispatcher import FSMContext
 from aiogram.dispatcher.filters.state import State, StatesGroup
 from aiogram.contrib.fsm_storage.memory import MemoryStorage
 
-import mysql.connector
 
 bot = Bot(c.token)
 storage = MemoryStorage()
@@ -183,12 +183,11 @@ def _media_group_builder(data, caption=True):
 
 
 def register_user(user_id, phone, location, referral=None):
-    conn = mysql.connector.connect(host=c.host, user=c.user, passwd=c.password, database=c.db)
-    cursor = conn.cursor(buffered=True)
-    insertQuery = "INSERT INTO users (user_id, phone, location, referral) VALUES (%s, %s, %s, %s)"
-    cursor.executemany(insertQuery, [(user_id, phone, location, referral)])
-    conn.commit()
-    conn.close()
+    with DatabaseConnection() as db:
+        conn, cursor = db
+        insertQuery = "INSERT INTO users (user_id, phone, location, referral) VALUES (%s, %s, %s, %s)"
+        cursor.executemany(insertQuery, [(user_id, phone, location, referral)])
+        conn.commit()
 
 
 async def request_contact(user_id, first_name):
@@ -201,12 +200,11 @@ async def request_contact(user_id, first_name):
 
 @dp.message_handler(content_types=['contact'])
 async def contact_func(message: types.Message, state: FSMContext):
-    conn = mysql.connector.connect(host=c.host, user=c.user, passwd=c.password, database=c.db)
-    cursor = conn.cursor(buffered=True)
-    existsQuery = "SELECT EXISTS (SELECT ID FROM users WHERE user_id=(%s))"
-    cursor.execute(existsQuery, [message.chat.id])
-    exists = cursor.fetchone()[0]
-    conn.close()
+    with DatabaseConnection() as db:
+        conn, cursor = db
+        existsQuery = "SELECT EXISTS (SELECT ID FROM users WHERE user_id=(%s))"
+        cursor.execute(existsQuery, [message.chat.id])
+        exists = cursor.fetchone()[0]
     if exists:
         return
     country_code = str(message.contact.phone_number)[:-9]
@@ -236,19 +234,20 @@ async def location_func(message: types.Message, state: FSMContext):
 
 
 async def main_menu(user_id, first_name, delete_message=None, referral=None, state=None):
-    conn = mysql.connector.connect(host=c.host, user=c.user, passwd=c.password, database=c.db)
-    cursor = conn.cursor(buffered=True)
-    selectQuery = "SELECT balance FROM users WHERE user_id=(%s)"
-    selectAdminQuery = "SELECT ID FROM admins WHERE user_id=(%s) AND menu_admin=1"
-    cursor.execute(selectQuery, [user_id])
-    result = cursor.fetchone()
-    if result:
-        balance = result[0]
-        cursor.execute(selectAdminQuery, [user_id])
-        admin = cursor.fetchone()
-        conn.close()
-    else:
-        conn.close()
+    register = False
+    with DatabaseConnection() as db:
+        conn, cursor = db
+        selectQuery = "SELECT balance FROM users WHERE user_id=(%s)"
+        selectAdminQuery = "SELECT ID FROM admins WHERE user_id=(%s) AND menu_admin=1"
+        cursor.execute(selectQuery, [user_id])
+        result = cursor.fetchone()
+        if result:
+            balance = result[0]
+            cursor.execute(selectAdminQuery, [user_id])
+            admin = cursor.fetchone()
+        else:
+            register = True
+    if register:
         if referral:
             await state.update_data({'referral': referral})
         await request_contact(user_id, first_name)
@@ -286,13 +285,12 @@ async def check_search_requests(text, message_id, channel):
     selectQuery = f"SELECT user_id, keyword FROM search_requests"
     deleteQuery = "DELETE FROM search_requests WHERE created<(%s)"
     now = datetime.datetime.now()
-    conn = mysql.connector.connect(host=c.host, user=c.user, passwd=c.password, database=c.db)
-    cursor = conn.cursor(buffered=True)
-    cursor.execute(deleteQuery, [now - datetime.timedelta(30)])
-    conn.commit()
-    cursor.execute(selectQuery)
-    results = cursor.fetchall()
-    conn.close()
+    with DatabaseConnection() as db:
+        conn, cursor = db
+        cursor.execute(deleteQuery, [now - datetime.timedelta(30)])
+        conn.commit()
+        cursor.execute(selectQuery)
+        results = cursor.fetchall()
     for result in results:
         keyword = str(result[1]).replace('_', '\\_').replace('*', '\\*').replace('`', '\\`').replace('[', '\\[')
         if result[1] in text:
@@ -305,12 +303,11 @@ async def check_search_requests(text, message_id, channel):
 
 
 async def choose_channel(callback_query):
-    conn = mysql.connector.connect(host=c.host, user=c.user, passwd=c.password, database=c.db)
-    cursor = conn.cursor(buffered=True)
-    selectQuery = "SELECT name, ID FROM channels"
-    cursor.execute(selectQuery)
-    result = cursor.fetchall()
-    conn.close()
+    with DatabaseConnection() as db:
+        conn, cursor = db
+        selectQuery = "SELECT name, ID FROM channels"
+        cursor.execute(selectQuery)
+        result = cursor.fetchall()
     buttons = [(name, ID) for name, ID in result]
     key = inline_keyboard(buttons, True)
     await Channels.choose.set()
@@ -321,12 +318,11 @@ async def choose_channel(callback_query):
 
 
 def delete_invalid_ad_from_db(message_id, channel):
-    conn = mysql.connector.connect(host=c.host, user=c.user, passwd=c.password, database=c.db)
-    cursor = conn.cursor(buffered=True)
-    deleteQuery = "DELETE FROM ads WHERE message_id=(%s) AND channel=(%s)"
-    cursor.execute(deleteQuery, [(message_id, channel)])
-    conn.commit()
-    conn.close()
+    with DatabaseConnection() as db:
+        conn, cursor = db
+        deleteQuery = "DELETE FROM ads WHERE message_id=(%s) AND channel=(%s)"
+        cursor.execute(deleteQuery, [(message_id, channel)])
+        conn.commit()
 
 
 async def proms_choose_mode(callback_query):
@@ -372,23 +368,22 @@ async def watch_proms(callback_query, state, arrow=None):
     selectPromosAllIdQuery = "SELECT ID FROM promo WHERE approved=1"
     selectPromoQuery = "SELECT text, photo, video FROM promo WHERE ID=(%s)"
     selectViewedQuery = "SELECT promo_id FROM promo_viewed WHERE user_id=(%s)"
-    conn = mysql.connector.connect(host=c.host, user=c.user, passwd=c.password, database=c.db)
-    cursor = conn.cursor(buffered=True)
-    cursor.execute(selectLastTimeQuery, [callback_query.message.chat.id])
-    last_time = cursor.fetchone()
-    if last_time:
-        difference = time.time() - last_time[0]
-        wait_time = 120  # время ожидание между сеансами просмотра рекламы
-        if difference < wait_time:
-            conn.close()
-            minutes, seconds = int(wait_time / 60 - difference / 60), int(60 - difference % 60)
-            await callback_query.answer(f"Следующую рекламу можно просмотреть через {minutes} мин. {seconds} сек.")
-            return
-    cursor.execute(selectPromosAllIdQuery)
-    promos_ids = cursor.fetchall()
-    cursor.execute(selectViewedQuery, [callback_query.message.chat.id])
-    viewed = cursor.fetchall()
-    conn.close()
+    with DatabaseConnection() as db:
+        conn, cursor = db
+        cursor.execute(selectLastTimeQuery, [callback_query.message.chat.id])
+        last_time = cursor.fetchone()
+        if last_time:
+            difference = time.time() - last_time[0]
+            wait_time = 120  # время ожидание между сеансами просмотра рекламы
+            if difference < wait_time:
+                conn.close()
+                minutes, seconds = int(wait_time / 60 - difference / 60), int(60 - difference % 60)
+                await callback_query.answer(f"Следующую рекламу можно просмотреть через {minutes} мин. {seconds} сек.")
+                return
+        cursor.execute(selectPromosAllIdQuery)
+        promos_ids = cursor.fetchall()
+        cursor.execute(selectViewedQuery, [callback_query.message.chat.id])
+        viewed = cursor.fetchall()
 
     if viewed and promos_ids:
         viewed = {x[0] for x in viewed}
@@ -424,11 +419,10 @@ async def watch_proms(callback_query, state, arrow=None):
         await Watch_promo.promo.set()
         single = True if len(promos_ids) == 1 else False
         edit = False
-    conn = mysql.connector.connect(host=c.host, user=c.user, passwd=c.password, database=c.db)
-    cursor = conn.cursor(buffered=True)
-    cursor.execute(selectPromoQuery, [new_promo_id])
-    promo = cursor.fetchone()
-    conn.close()
+    with DatabaseConnection() as db:
+        conn, cursor = db
+        cursor.execute(selectPromoQuery, [new_promo_id])
+        promo = cursor.fetchone()
     await send_promo(callback_query, promo, edit=edit, single=single)
     await state.update_data({'promo_id': new_promo_id, 'start_watch': time.time()})
 
@@ -446,12 +440,11 @@ async def search_choose_option(callback_query):
 
 
 async def search_my_requests(callback_query):
-    conn = mysql.connector.connect(host=c.host, user=c.user, passwd=c.password, database=c.db)
-    cursor = conn.cursor(buffered=True)
-    selectQuery = "SELECT keyword, created FROM search_requests WHERE user_id=(%s)"
-    cursor.execute(selectQuery, [callback_query.message.chat.id])
-    result = cursor.fetchall()
-    conn.close()
+    with DatabaseConnection() as db:
+        conn, cursor = db
+        selectQuery = "SELECT keyword, created FROM search_requests WHERE user_id=(%s)"
+        cursor.execute(selectQuery, [callback_query.message.chat.id])
+        result = cursor.fetchall()
     if not result:
         await callback_query.answer("У вас нет ни одного запроса!")
         return
@@ -473,22 +466,21 @@ async def search_make_requests(callback_query):
 
 
 async def my_ads(callback_query):
-    conn = mysql.connector.connect(host=c.host, user=c.user, passwd=c.password, database=c.db)
-    cursor = conn.cursor(buffered=True)
-    selectQuery = "SELECT channel, message_id, ID, created, period FROM ads WHERE user_id=(%s)"
-    selectChannelQuery = "SELECT username, name, chat_id FROM channels WHERE ID=(%s)"
-    cursor.execute(selectQuery, [callback_query.message.chat.id])
-    results = cursor.fetchall()
-    if not results:
-        conn.close()
-        await callback_query.answer("У вас нет ни одного объявления!")
-        return
-    channels = {x[0] for x in results}
-    usernames = {}
-    for ch in channels:
-        cursor.execute(selectChannelQuery, [ch])
-        usernames[ch] = cursor.fetchone()
-    conn.close()
+    with DatabaseConnection() as db:
+        conn, cursor = db
+        selectQuery = "SELECT channel, message_id, ID, created, period FROM ads WHERE user_id=(%s)"
+        selectChannelQuery = "SELECT username, name, chat_id FROM channels WHERE ID=(%s)"
+        cursor.execute(selectQuery, [callback_query.message.chat.id])
+        results = cursor.fetchall()
+        if not results:
+            conn.close()
+            await callback_query.answer("У вас нет ни одного объявления!")
+            return
+        channels = {x[0] for x in results}
+        usernames = {}
+        for ch in channels:
+            cursor.execute(selectChannelQuery, [ch])
+            usernames[ch] = cursor.fetchone()
 
     for ad in results:
         format_channel_name = str(usernames[ad[0]][1]).replace('_', '\\_').replace('*', '\\*').replace('`', '\\`').replace('[', '\\[')
@@ -525,12 +517,11 @@ async def delete_ad(callback_query, state):
 async def my_promos(callback_query, state, edit=False):
     data = await state.get_data()
     last_index = data.get('promo_index')
-    conn = mysql.connector.connect(host=c.host, user=c.user, passwd=c.password, database=c.db)
-    cursor = conn.cursor(buffered=True)
-    selectQuery = "SELECT * FROM promo WHERE user_id=(%s)"
-    cursor.execute(selectQuery, [callback_query.message.chat.id])
-    result = cursor.fetchall()
-    conn.close()
+    with DatabaseConnection() as db:
+        conn, cursor = db
+        selectQuery = "SELECT * FROM promo WHERE user_id=(%s)"
+        cursor.execute(selectQuery, [callback_query.message.chat.id])
+        result = cursor.fetchall()
     if not result:
         await callback_query.answer("У вас нет ни одной рекламы!")
         return
@@ -580,17 +571,16 @@ async def my_promos(callback_query, state, edit=False):
 
 
 async def referrals(callback_query):
-    conn = mysql.connector.connect(host=c.host, user=c.user, passwd=c.password, database=c.db)
-    cursor = conn.cursor(buffered=True)
-    countQuery = "SELECT COUNT(ID) FROM users WHERE referral=(%s)"
-    selectBonusQuery = "SELECT referral_balance FROM users WHERE user_id=(%s)"
-    cursor.execute(countQuery, [callback_query.message.chat.id])
-    num = cursor.fetchone()[0]
-    bonus = 0
-    if num:
-        cursor.execute(selectBonusQuery, [callback_query.message.chat.id])
-        bonus = cursor.fetchone()[0]
-    conn.close()
+    with DatabaseConnection() as db:
+        conn, cursor = db
+        countQuery = "SELECT COUNT(ID) FROM users WHERE referral=(%s)"
+        selectBonusQuery = "SELECT referral_balance FROM users WHERE user_id=(%s)"
+        cursor.execute(countQuery, [callback_query.message.chat.id])
+        num = cursor.fetchone()[0]
+        bonus = 0
+        if num:
+            cursor.execute(selectBonusQuery, [callback_query.message.chat.id])
+            bonus = cursor.fetchone()[0]
     await callback_query.message.answer(f"*Приглашено пользователей:* {num}\n*Заработано бонусов:* {bonus} грн.\n*Ваша реферальная ссылка:*\n",
                                         parse_mode="Markdown", reply_markup=inline_keyboard(Buttons.back))
     await callback_query.message.answer(f"https://t.me/AdvancedAdsBot?start=ref{callback_query.message.chat.id}")
@@ -616,35 +606,34 @@ async def admin_channels(callback_query, state):
     countQuery = "SELECT COUNT(ID) FROM ads WHERE channel=(%s)"
     selectChannelsQuery = "SELECT ID FROM channels"
     last_id = data.get('channel_id')
-    conn = mysql.connector.connect(host=c.host, user=c.user, passwd=c.password, database=c.db)
-    cursor = conn.cursor(buffered=True)
-    if last_id:
-        last_index = data['channel_index']
-        array = data['channel_array']
-        if callback_query.data == Buttons.arrows[0].data:
-            next_index = last_index - 1
-            if next_index < 0:
-                next_index = len(array) - 1
+    with DatabaseConnection() as db:
+        conn, cursor = db
+        if last_id:
+            last_index = data['channel_index']
+            array = data['channel_array']
+            if callback_query.data == Buttons.arrows[0].data:
+                next_index = last_index - 1
+                if next_index < 0:
+                    next_index = len(array) - 1
+            else:
+                next_index = last_index + 1
+                if len(array) <= next_index:
+                    next_index = 0
+            next_id = array[next_index]
         else:
-            next_index = last_index + 1
-            if len(array) <= next_index:
-                next_index = 0
-        next_id = array[next_index]
-    else:
-        cursor.execute(selectChannelsQuery)
-        channels_ids = cursor.fetchall()
-        if not channels_ids:
-            conn.close()
-            await callback_query.answer("Ни одного канала нет")
-            return
-        array = [x[0] for x in channels_ids]
-        next_index = 0
-        next_id = array[0]
-    cursor.execute(selectQuery, [next_id])
-    channel = cursor.fetchone()
-    cursor.execute(countQuery, [next_id])
-    count = cursor.fetchone()[0]
-    conn.close()
+            cursor.execute(selectChannelsQuery)
+            channels_ids = cursor.fetchall()
+            if not channels_ids:
+                conn.close()
+                await callback_query.answer("Ни одного канала нет")
+                return
+            array = [x[0] for x in channels_ids]
+            next_index = 0
+            next_id = array[0]
+        cursor.execute(selectQuery, [next_id])
+        channel = cursor.fetchone()
+        cursor.execute(countQuery, [next_id])
+        count = cursor.fetchone()[0]
 
     text = f"ID: {channel[0]}\nИмя: {channel[2]}\nЮзернейм: @{channel[1]}\nОбъявлений: {count}\nСтоимость объявлений за:\n" \
            f" - 1 день: {channel[3]}\n - 7 дней: {channel[4]}\n - 14 дней: {channel[5]}\n - 30 дней: {channel[6]}"
@@ -693,38 +682,37 @@ async def admin_promo(callback_query, state):
     countAllQuery = "SELECT COUNT(ID) FROM promo WHERE approved=0"
     selectPromosQuery = "SELECT ID FROM promo WHERE approved=0"
     last_id = data.get('promo_id')
-    conn = mysql.connector.connect(host=c.host, user=c.user, passwd=c.password, database=c.db)
-    cursor = conn.cursor(buffered=True)
-    if last_id:
-        last_index = data['promo_index']
-        array = data['promo_array']
-        length = len(array)
-        if callback_query.data == Buttons.arrows[0].data:
-            next_index = last_index - 1
-            if next_index < 0:
-                next_index = length - 1
+    with DatabaseConnection() as db:
+        conn, cursor = db
+        if last_id:
+            last_index = data['promo_index']
+            array = data['promo_array']
+            length = len(array)
+            if callback_query.data == Buttons.arrows[0].data:
+                next_index = last_index - 1
+                if next_index < 0:
+                    next_index = length - 1
+            else:
+                next_index = last_index + 1
+                if length <= next_index:
+                    next_index = 0
+            next_id = array[next_index]
+            count = None
         else:
-            next_index = last_index + 1
-            if length <= next_index:
-                next_index = 0
-        next_id = array[next_index]
-        count = None
-    else:
-        cursor.execute(selectPromosQuery)
-        promos_ids = cursor.fetchall()
-        if not promos_ids:
-            conn.close()
-            await callback_query.answer("Неодобренных объявлений пока нет")
-            return
-        array = [x[0] for x in promos_ids]
-        length = len(array)
-        next_index = 0
-        next_id = array[0]
-        cursor.execute(countAllQuery)
-        count = cursor.fetchone()[0]
-    cursor.execute(selectQuery, [next_id])
-    promo = cursor.fetchone()
-    conn.close()
+            cursor.execute(selectPromosQuery)
+            promos_ids = cursor.fetchall()
+            if not promos_ids:
+                conn.close()
+                await callback_query.answer("Неодобренных объявлений пока нет")
+                return
+            array = [x[0] for x in promos_ids]
+            length = len(array)
+            next_index = 0
+            next_id = array[0]
+            cursor.execute(countAllQuery)
+            count = cursor.fetchone()[0]
+        cursor.execute(selectQuery, [next_id])
+        promo = cursor.fetchone()
 
     format_text = str(promo[2]).replace('_', '\\_').replace('*', '\\*').replace('`', '\\`').replace('[', '\\[')
     text = f"_{next_index + 1}/{length}_\nID: {promo[0]}\n[Владелец](tg://user?id={promo[1]})\nСоздано: {datetime.datetime.strftime(promo[5], '%d.%m.%Y')}\n" \
@@ -760,40 +748,39 @@ async def report_send(callback_query):
     insertQuery = "INSERT INTO reports (channel, message_id, user_id) VALUES (%s, %s, %s)"
     deleteQuery = "DELETE FROM ads WHERE channel=(%s) AND message_id=(%s)"
     selectAdmins = "SELECT user_id FROM admins WHERE menu_admin=1"
-    conn = mysql.connector.connect(host=c.host, user=c.user, passwd=c.password, database=c.db)
-    cursor = conn.cursor(buffered=True)
-    cursor.execute(selectChannelQuery, [callback_query.message.chat.username])
-    channel = cursor.fetchone()[0]
-    cursor.executemany(selectExistsUserQuery, [(channel, message_id, callback_query.from_user.id)])
-    exists = cursor.fetchone()[0]
-    if exists:  # exists for RELEASE, False for DEBUG
-        conn.close()
-        await callback_query.answer("Вы уже подали жалобу!", show_alert=True)
-        return
-    cursor.executemany(selectQuery, [(channel, message_id)])
-    rep_num = cursor.fetchone()[0]
-    admins = None
-    with open('prices.json', 'r') as f:
-        ban = json.load(f)['ban']
-    ban_admin = ban[0]  # количество для уведомления админа
-    ban_auto = ban[1]  # количество для автоматического удаления
-    if rep_num < ban_admin or ban_auto > rep_num > ban_admin:  # количество игнорирования
-        cursor.executemany(insertQuery, [(channel, message_id, callback_query.from_user.id)])
-    elif rep_num == ban_admin:
-        cursor.executemany(insertQuery, [(channel, message_id, callback_query.from_user.id)])
-        cursor.execute(selectAdmins)
-        admins = cursor.fetchall()
-    elif rep_num == ban_auto:
-        cursor.executemany(deleteQuery, [(channel, message_id)])
+    with DatabaseConnection() as db:
+        conn, cursor = db
+        cursor.execute(selectChannelQuery, [callback_query.message.chat.username])
+        channel = cursor.fetchone()[0]
+        cursor.executemany(selectExistsUserQuery, [(channel, message_id, callback_query.from_user.id)])
+        exists = cursor.fetchone()[0]
+        if exists:  # exists for RELEASE, False for DEBUG
+            conn.close()
+            await callback_query.answer("Вы уже подали жалобу!", show_alert=True)
+            return
+        cursor.executemany(selectQuery, [(channel, message_id)])
+        rep_num = cursor.fetchone()[0]
+        admins = None
+        with open('prices.json', 'r') as f:
+            ban = json.load(f)['ban']
+        ban_admin = ban[0]  # количество для уведомления админа
+        ban_auto = ban[1]  # количество для автоматического удаления
+        if rep_num < ban_admin or ban_auto > rep_num > ban_admin:  # количество игнорирования
+            cursor.executemany(insertQuery, [(channel, message_id, callback_query.from_user.id)])
+        elif rep_num == ban_admin:
+            cursor.executemany(insertQuery, [(channel, message_id, callback_query.from_user.id)])
+            cursor.execute(selectAdmins)
+            admins = cursor.fetchall()
+        elif rep_num == ban_auto:
+            cursor.executemany(deleteQuery, [(channel, message_id)])
+            conn.commit()
+            conn.close()
+            try:
+                await bot.delete_message(callback_query.message.chat.id, message_id)
+            except utils.exceptions.MessageCantBeDeleted: pass
+            except utils.exceptions.MessageToDeleteNotFound: pass
+            return
         conn.commit()
-        conn.close()
-        try:
-            await bot.delete_message(callback_query.message.chat.id, message_id)
-        except utils.exceptions.MessageCantBeDeleted: pass
-        except utils.exceptions.MessageToDeleteNotFound: pass
-        return
-    conn.commit()
-    conn.close()
     await callback_query.answer("Жалоба на объявление отправлена", show_alert=True)
     if admins:
         key = types.InlineKeyboardMarkup()
@@ -824,12 +811,11 @@ async def admin_delete_message(callback_query):
         await callback_query.answer("Я не могу удалить это объявление, удалите вручную", show_alert=True)
     except utils.exceptions.MessageToDeleteNotFound:
         await callback_query.answer("Это объявление уже было удалено")
-    conn = mysql.connector.connect(host=c.host, user=c.user, passwd=c.password, database=c.db)
-    cursor = conn.cursor(buffered=True)
-    deleteQuery = "DELETE FROM ads WHERE channel=(%s) AND message_id=(%s)"
-    cursor.executemany(deleteQuery, [(channel, message_id)])
-    conn.commit()
-    conn.close()
+    with DatabaseConnection() as db:
+        conn, cursor = db
+        deleteQuery = "DELETE FROM ads WHERE channel=(%s) AND message_id=(%s)"
+        cursor.executemany(deleteQuery, [(channel, message_id)])
+        conn.commit()
     if success:
         try: await bot.delete_message(callback_query.message.chat.id, callback_query.message.message_id)
         except utils.exceptions.MessageCantBeDeleted: pass
@@ -883,7 +869,7 @@ async def callback_inline(callback_query: types.CallbackQuery, state: FSMContext
 
     elif callback_query.data == Buttons.report.data:
         await report_send(callback_query)
-    elif callback_query.data[:3] == 'delRep':
+    elif callback_query.data[:6] == 'delRep':
         await admin_delete_message(callback_query)
 
     elif callback_query.data[:6] == 'editAd':
@@ -898,13 +884,12 @@ async def callback_inline(callback_query: types.CallbackQuery, state: FSMContext
 async def channels_choose(callback_query, state):
     selectQuery = "SELECT * FROM channels WHERE ID=(%s)"
     countQuery = "SELECT COUNT(ID) FROM ads WHERE channel=(%s)"
-    conn = mysql.connector.connect(host=c.host, user=c.user, passwd=c.password, database=c.db)
-    cursor = conn.cursor(buffered=True)
-    cursor.execute(selectQuery, [callback_query.data])
-    result = cursor.fetchone()
-    cursor.execute(countQuery, [callback_query.data])
-    count = cursor.fetchone()[0]
-    conn.close()
+    with DatabaseConnection() as db:
+        conn, cursor = db
+        cursor.execute(selectQuery, [callback_query.data])
+        result = cursor.fetchone()
+        cursor.execute(countQuery, [callback_query.data])
+        count = cursor.fetchone()[0]
     await state.update_data({'channel': {'name': result[2], 'username': result[1], 'ID': callback_query.data,
                                          'price_1': result[3], 'price_7': result[4], 'price_14': result[5], 'price_30': result[6]}})
     await Channels.next()
@@ -1029,13 +1014,12 @@ async def publish_to_channel(callback_query, state):
     selectChannelQuery = "SELECT username FROM channels WHERE ID=(%s)"
     insertQuery = "INSERT INTO ads (user_id, channel, message_id, period, expire, text) VALUES (%s, %s, %s, %s, %s, %s)"
     updateQuery = "UPDATE users SET balance=(%s) WHERE user_id=(%s)"
-    conn = mysql.connector.connect(host=c.host, user=c.user, passwd=c.password, database=c.db)
-    cursor = conn.cursor(buffered=True)
-    cursor.execute(selectBalanceQuery, [callback_query.message.chat.id])
-    balance = cursor.fetchone()[0]
-    cursor.execute(selectChannelQuery, [data['channel']['ID']])
-    channel = cursor.fetchone()[0]
-    conn.close()
+    with DatabaseConnection() as db:
+        conn, cursor = db
+        cursor.execute(selectBalanceQuery, [callback_query.message.chat.id])
+        balance = cursor.fetchone()[0]
+        cursor.execute(selectChannelQuery, [data['channel']['ID']])
+        channel = cursor.fetchone()[0]
     if balance < data['price']:
         await callback_query.answer(f"На вашем балансе недостаточно средств. Текущая сумма на балансе: {balance} грн.", show_alert=True)
         return
@@ -1055,13 +1039,12 @@ async def publish_to_channel(callback_query, state):
         else:
             m = await bot.send_message(channel, data['media']['caption'], reply_markup=key)
 
-    conn = mysql.connector.connect(host=c.host, user=c.user, passwd=c.password, database=c.db)
-    cursor = conn.cursor(buffered=True)
-    cursor.executemany(insertQuery, [(callback_query.message.chat.id, data['channel']['ID'], m.message_id, data['period'],
-                                     datetime.datetime.now() + datetime.timedelta(data['period']), data['media']['caption'])])
-    cursor.executemany(updateQuery, [(balance - data['price'], callback_query.message.chat.id)])
-    conn.commit()
-    conn.close()
+    with DatabaseConnection() as db:
+        conn, cursor = db
+        cursor.executemany(insertQuery, [(callback_query.message.chat.id, data['channel']['ID'], m.message_id, data['period'],
+                                         datetime.datetime.now() + datetime.timedelta(data['period']), data['media']['caption'])])
+        cursor.executemany(updateQuery, [(balance - data['price'], callback_query.message.chat.id)])
+        conn.commit()
 
     await state.finish()
     await callback_query.message.answer("Ваше объявление создано. Детальнее вы можете посмотреть в меню «Мои объявления»",
@@ -1101,23 +1084,22 @@ async def callback_inline(callback_query: types.CallbackQuery, state: FSMContext
             insertViewedQuery = "INSERT INTO promo_viewed (user_id, promo_id) VALUES (%s, %s)"
             selectBalanceQuery = "SELECT balance FROM users WHERE user_id=(%s)"
             updateBalanceQuery = "UPDATE users SET balance=(%s) WHERE user_id=(%s)"
-            conn = mysql.connector.connect(host=c.host, user=c.user, passwd=c.password, database=c.db)
-            cursor = conn.cursor(buffered=True)
-            cursor.execute(selectBalanceQuery, [callback_query.message.chat.id])
-            balance = cursor.fetchone()[0]
-            cursor.execute(selectViewsQuery, [data['promo_id']])
-            views = cursor.fetchone()[0]
-            cursor.execute(existsQuery, [callback_query.message.chat.id])
-            exists = cursor.fetchone()[0]
-            if exists:
-                cursor.executemany(updateQuery, [(int(time.time()), callback_query.message.chat.id)])
-            else:
-                cursor.executemany(insertQuery, [(callback_query.message.chat.id, int(time.time()))])
-            cursor.executemany(insertViewedQuery, [(callback_query.message.chat.id, data['promo_id'])])
-            cursor.executemany(updateBalanceQuery, [(balance + 1, callback_query.message.chat.id)])
-            cursor.executemany(updateViewsQuery, [(views + 1, data['promo_id'])])
-            conn.commit()
-            conn.close()
+            with DatabaseConnection() as db:
+                conn, cursor = db
+                cursor.execute(selectBalanceQuery, [callback_query.message.chat.id])
+                balance = cursor.fetchone()[0]
+                cursor.execute(selectViewsQuery, [data['promo_id']])
+                views = cursor.fetchone()[0]
+                cursor.execute(existsQuery, [callback_query.message.chat.id])
+                exists = cursor.fetchone()[0]
+                if exists:
+                    cursor.executemany(updateQuery, [(int(time.time()), callback_query.message.chat.id)])
+                else:
+                    cursor.executemany(insertQuery, [(callback_query.message.chat.id, int(time.time()))])
+                cursor.executemany(insertViewedQuery, [(callback_query.message.chat.id, data['promo_id'])])
+                cursor.executemany(updateBalanceQuery, [(balance + 1, callback_query.message.chat.id)])
+                cursor.executemany(updateViewsQuery, [(views + 1, data['promo_id'])])
+                conn.commit()
             await state.finish()
             await callback_query.answer("На ваш баланс зачислено 1 грн.", show_alert=True)
             await main_menu(callback_query.message.chat.id, callback_query.message.chat.first_name, callback_query.message.message_id)
@@ -1181,22 +1163,18 @@ async def publish_ad(callback_query, state):
     selectBalanceQuery = "SELECT balance FROM users WHERE user_id=(%s)"
     insertQuery = "INSERT INTO promo (user_id, text, photo, video, required_views, paid) VALUES (%s, %s, %s, %s, %s, %s)"
     updateQuery = "UPDATE users SET balance=(%s) WHERE user_id=(%s)"
-    conn = mysql.connector.connect(host=c.host, user=c.user, passwd=c.password, database=c.db)
-    cursor = conn.cursor(buffered=True)
-    cursor.execute(selectBalanceQuery, [callback_query.message.chat.id])
-    balance = cursor.fetchone()[0]
-    conn.close()
-    if balance < data['price']:
-        await callback_query.answer(f"На вашем балансе недостаточно средств. Текущая сумма на балансе: {balance} грн.", show_alert=True)
-        return
-
-    conn = mysql.connector.connect(host=c.host, user=c.user, passwd=c.password, database=c.db)
-    cursor = conn.cursor(buffered=True)
-    cursor.executemany(insertQuery, [(callback_query.message.chat.id, data['media']['caption'], data['media']['photo'],
-                                      data['media']['video'], data['views'], data['price'])])
-    cursor.executemany(updateQuery, [(balance - data['price'], callback_query.message.chat.id)])
-    conn.commit()
-    conn.close()
+    with DatabaseConnection() as db:
+        conn, cursor = db
+        cursor.execute(selectBalanceQuery, [callback_query.message.chat.id])
+        balance = cursor.fetchone()[0]
+        if balance < data['price']:
+            conn.close()
+            await callback_query.answer(f"На вашем балансе недостаточно средств. Текущая сумма на балансе: {balance} грн.", show_alert=True)
+            return
+        cursor.executemany(insertQuery, [(callback_query.message.chat.id, data['media']['caption'], data['media']['photo'],
+                                          data['media']['video'], data['views'], data['price'])])
+        cursor.executemany(updateQuery, [(balance - data['price'], callback_query.message.chat.id)])
+        conn.commit()
 
     await state.finish()
     await callback_query.message.answer("Ваша реклама создана. Детальнее вы можете посмотреть в меню «Мои рекламы»",
@@ -1226,20 +1204,20 @@ async def search(message: types.Message, state: FSMContext):
         return
     await state.update_data({'keyword': keyword, 'ad_index': 0})
     await Make_search_request.next()
-    conn = mysql.connector.connect(host=c.host, user=c.user, passwd=c.password, database=c.db)
-    cursor = conn.cursor(buffered=True)
-    searchQuery = f"SELECT channel, message_id FROM ads WHERE text LIKE '%{keyword}%'"
-    selectChannelQuery = "SELECT username FROM channels WHERE ID=(%s)"
-    cursor.execute(searchQuery)
-    result = cursor.fetchall()
+
+    with DatabaseConnection() as db:
+        conn, cursor = db
+        searchQuery = f"SELECT channel, message_id FROM ads WHERE text LIKE '%{keyword}%'"
+        selectChannelQuery = "SELECT username FROM channels WHERE ID=(%s)"
+        cursor.execute(searchQuery)
+        result = cursor.fetchall()
+        if result:
+            cursor.execute(selectChannelQuery, [result[0][0]])
+            channel = cursor.fetchone()[0]
     if result:
-        cursor.execute(selectChannelQuery, [result[0][0]])
-        channel = cursor.fetchone()[0]
-        conn.close()
         await message.answer(f"[Объявление](https://t.me/{channel}/{result[0][1]})", parse_mode="Markdown",
                              reply_markup=inline_keyboard(Buttons.on_notifications, back_data=True, arrows=True))
     else:
-        conn.close()
         await message.reply(f"По запросу «{keyword}» ничего не найдено", reply_markup=inline_keyboard(Buttons.on_notifications, back_data=True))
 
 
@@ -1252,33 +1230,30 @@ async def callback_inline(callback_query: types.CallbackQuery, state: FSMContext
         edit = data.get('edit')
         last_index = data['ad_index']
         keyword = data['keyword']
-        conn = mysql.connector.connect(host=c.host, user=c.user, passwd=c.password, database=c.db)
-        cursor = conn.cursor(buffered=True)
-        searchQuery = f"SELECT channel, message_id FROM ads WHERE text LIKE '%{keyword}%'"
-        selectChannelQuery = "SELECT username FROM channels WHERE ID=(%s)"
-        cursor.execute(searchQuery)
-        result = cursor.fetchall()
-        conn.close()
-        if not result:
-            await callback_query.answer("Объявление не найдено", show_alert=True)
-            return
-        length = len(result)
-        if callback_query.data == Buttons.arrows[0].data:
-            if last_index == 0 or last_index > length - 1:
-                new_index = length - 1
+        with DatabaseConnection() as db:
+            conn, cursor = db
+            searchQuery = f"SELECT channel, message_id FROM ads WHERE text LIKE '%{keyword}%'"
+            selectChannelQuery = "SELECT username FROM channels WHERE ID=(%s)"
+            cursor.execute(searchQuery)
+            result = cursor.fetchall()
+            if not result:
+                conn.close()
+                await callback_query.answer("Объявление не найдено", show_alert=True)
+                return
+            length = len(result)
+            if callback_query.data == Buttons.arrows[0].data:
+                if last_index == 0 or last_index > length - 1:
+                    new_index = length - 1
+                else:
+                    new_index = last_index - 1
             else:
-                new_index = last_index - 1
-        else:
-            if last_index >= length - 1:
-                new_index = 0
-            else:
-                new_index = last_index + 1
+                if last_index >= length - 1:
+                    new_index = 0
+                else:
+                    new_index = last_index + 1
 
-        conn = mysql.connector.connect(host=c.host, user=c.user, passwd=c.password, database=c.db)
-        cursor = conn.cursor(buffered=True)
-        cursor.execute(selectChannelQuery, [result[new_index][0]])
-        channel = cursor.fetchone()[0]
-        conn.close()
+            cursor.execute(selectChannelQuery, [result[new_index][0]])
+            channel = cursor.fetchone()[0]
 
         await state.update_data({'ad_index': new_index, 'edit': True})
         text = f"[Объявление](https://t.me/{channel}/{result[new_index][1]})"
@@ -1311,20 +1286,17 @@ async def callback_inline(callback_query: types.CallbackQuery, state: FSMContext
         selectBalanceQuery = "SELECT balance FROM users WHERE user_id=(%s)"
         updateBalanceQuery = "UPDATE users SET balance=(%s) WHERE user_id=(%s)"
         insertQuery = "INSERT INTO search_requests (user_id, keyword) VALUES (%s, %s)"
-        conn = mysql.connector.connect(host=c.host, user=c.user, passwd=c.password, database=c.db)
-        cursor = conn.cursor(buffered=True)
-        cursor.execute(selectBalanceQuery, [callback_query.message.chat.id])
-        balance = cursor.fetchone()[0]
-        conn.close()
-        if balance < price:
-            await callback_query.answer(f"На вашем балансе недостаточно средств. Текущая сумма на балансе: {balance} грн.", show_alert=True)
-            return
-        conn = mysql.connector.connect(host=c.host, user=c.user, passwd=c.password, database=c.db)
-        cursor = conn.cursor(buffered=True)
-        cursor.executemany(insertQuery, [(callback_query.message.chat.id, data['keyword'])])
-        cursor.executemany(updateBalanceQuery, [(balance - price, callback_query.message.chat.id)])
-        conn.commit()
-        conn.close()
+        with DatabaseConnection() as db:
+            conn, cursor = db
+            cursor.execute(selectBalanceQuery, [callback_query.message.chat.id])
+            balance = cursor.fetchone()[0]
+            if balance < price:
+                conn.close()
+                await callback_query.answer(f"На вашем балансе недостаточно средств. Текущая сумма на балансе: {balance} грн.", show_alert=True)
+                return
+            cursor.executemany(insertQuery, [(callback_query.message.chat.id, data['keyword'])])
+            cursor.executemany(updateBalanceQuery, [(balance - price, callback_query.message.chat.id)])
+            conn.commit()
         await state.finish()
         await callback_query.message.answer(f"Оповещения по фразе «{data['keyword']}» подключены на 30 дней. Детальнее вы можете посмотреть в меню «Поиск - Мои запросы»",
                                             reply_markup=inline_keyboard(Buttons.back_to_menu))
@@ -1352,15 +1324,14 @@ async def callback_inline(callback_query: types.CallbackQuery, state: FSMContext
     if callback_query.data == Buttons.confirm_delete[0].data:
         data = await state.get_data()
         await state.finish()
-        conn = mysql.connector.connect(host=c.host, user=c.user, passwd=c.password, database=c.db)
-        cursor = conn.cursor(buffered=True)
-        deleteQuery = "DELETE FROM ads WHERE ID=(%s)"
-        selectAdminsQuery = "SELECT user_id FROM admins WHERE menu_admin=1"
-        cursor.execute(selectAdminsQuery)
-        admins = cursor.fetchall()
-        cursor.execute(deleteQuery, [data['ad_id']])
-        conn.commit()
-        conn.close()
+        with DatabaseConnection() as db:
+            conn, cursor = db
+            deleteQuery = "DELETE FROM ads WHERE ID=(%s)"
+            selectAdminsQuery = "SELECT user_id FROM admins WHERE menu_admin=1"
+            cursor.execute(selectAdminsQuery)
+            admins = cursor.fetchall()
+            cursor.execute(deleteQuery, [data['ad_id']])
+            conn.commit()
         try:
             await bot.delete_message(data['channel'], data['message_id'])
             await callback_query.answer("Удалено!", show_alert=True)
@@ -1424,20 +1395,19 @@ async def search(message: types.Message, state: FSMContext):
     if not forward:
         await message.answer("Это не пересланное сообщение!")
         return
-    conn = mysql.connector.connect(host=c.host, user=c.user, passwd=c.password, database=c.db)
-    cursor = conn.cursor(buffered=True)
-    selectQuery = "SELECT ID FROM users WHERE user_id=(%s)"
-    selectAdminQuery = "SELECT menu_admin, menu_priv, priv_add, priv_remove FROM admins WHERE user_id=(%s)"
-    cursor.execute(selectQuery, [forward.id])
-    db_id = cursor.fetchone()
-    if not db_id:
-        conn.close()
-        await state.finish()
-        await message.answer("Пользователь отсутствует в базе", reply_markup=inline_keyboard(Buttons.back))
-        return
-    cursor.execute(selectAdminQuery, [forward.id])
-    result = cursor.fetchone()
-    conn.close()
+    with DatabaseConnection() as db:
+        conn, cursor = db
+        selectQuery = "SELECT ID FROM users WHERE user_id=(%s)"
+        selectAdminQuery = "SELECT menu_admin, menu_priv, priv_add, priv_remove FROM admins WHERE user_id=(%s)"
+        cursor.execute(selectQuery, [forward.id])
+        db_id = cursor.fetchone()
+        if not db_id:
+            conn.close()
+            await state.finish()
+            await message.answer("Пользователь отсутствует в базе", reply_markup=inline_keyboard(Buttons.back))
+            return
+        cursor.execute(selectAdminQuery, [forward.id])
+        result = cursor.fetchone()
     if not result:
         privileges = " - Отсутствуют"
     else:
@@ -1508,15 +1478,14 @@ async def callback_inline(callback_query: types.CallbackQuery, state: FSMContext
             updateQuery = "UPDATE admins SET priv_add=0 WHERE user_id=(%s)"
         elif callback_query.data == Buttons.privileges[3].data:
             updateQuery = "UPDATE admins SET priv_remove=0 WHERE user_id=(%s)"
-    conn = mysql.connector.connect(host=c.host, user=c.user, passwd=c.password, database=c.db)
-    cursor = conn.cursor(buffered=True)
-    cursor.execute(existsQuery, [data['priv_id']])
-    exists = cursor.fetchone()[0]
-    if not exists:
-        cursor.execute(insertQuery, [data['priv_id']])
-    cursor.execute(updateQuery, [data['priv_id']])
-    conn.commit()
-    conn.close()
+    with DatabaseConnection() as db:
+        conn, cursor = db
+        cursor.execute(existsQuery, [data['priv_id']])
+        exists = cursor.fetchone()[0]
+        if not exists:
+            cursor.execute(insertQuery, [data['priv_id']])
+        cursor.execute(updateQuery, [data['priv_id']])
+        conn.commit()
     await state.finish()
     await callback_query.answer("Привилегии успешно изменены", show_alert=True)
     await admin_menu(callback_query, callback_query.message.message_id)
@@ -1537,11 +1506,10 @@ async def callback_inline(callback_query: types.CallbackQuery, state: FSMContext
     elif callback_query.data == Buttons.admin_channels[1].data:
         data = await state.get_data()
         selectQuery = "SELECT name FROM channels WHERE ID=(%s)"
-        conn = mysql.connector.connect(host=c.host, user=c.user, passwd=c.password, database=c.db)
-        cursor = conn.cursor(buffered=True)
-        cursor.execute(selectQuery, [data['channel_id']])
-        channel = cursor.fetchone()[0]
-        conn.close()
+        with DatabaseConnection() as db:
+            conn, cursor = db
+            cursor.execute(selectQuery, [data['channel_id']])
+            channel = cursor.fetchone()[0]
         await callback_query.message.answer(f"Вы уверены что хотите удалить канал «{channel}»?",
                                             reply_markup=inline_keyboard(inline_keyboard(Buttons.confirm_delete)))
         try: await bot.delete_message(callback_query.message.chat.id, callback_query.message.message_id)
@@ -1550,12 +1518,11 @@ async def callback_inline(callback_query: types.CallbackQuery, state: FSMContext
         data = await state.get_data()
         deleteQuery = "DELETE FROM channels WHERE ID=(%s)"
         deleteAllAdsQuery = "DELETE FROM ads WHERE channel=(%s)"
-        conn = mysql.connector.connect(host=c.host, user=c.user, passwd=c.password, database=c.db)
-        cursor = conn.cursor(buffered=True)
-        cursor.execute(deleteQuery, [data['channel_id']])
-        cursor.execute(deleteAllAdsQuery, [data['channel_id']])
-        conn.commit()
-        conn.close()
+        with DatabaseConnection() as db:
+            conn, cursor = db
+            cursor.execute(deleteQuery, [data['channel_id']])
+            cursor.execute(deleteAllAdsQuery, [data['channel_id']])
+            conn.commit()
         await callback_query.answer("Удалено!", show_alert=True)
         await admin_menu(callback_query, callback_query.message.message_id)
     elif callback_query.data == Buttons.confirm_delete[1].data:
@@ -1608,16 +1575,15 @@ async def new_channel(message: types.Message, state: FSMContext):
     existsQuery = "SELECT EXISTS (SELECT ID FROM channels WHERE chat_id=(%s))"
     updateQuery = "UPDATE channels SET username=(%s), name=(%s), 1_day=(%s), 7_days=(%s), 14_days=(%s), 30_days=(%s) WHERE chat_id=(%s)"
     insertQuery = "INSERT INTO channels (username, name, chat_id, 1_day, 7_days, 14_days, 30_days) VALUES (%s, %s, %s, %s, %s, %s, %s)"
-    conn = mysql.connector.connect(host=c.host, user=c.user, passwd=c.password, database=c.db)
-    cursor = conn.cursor(buffered=True)
-    cursor.execute(existsQuery, [ch_id])
-    exists = cursor.fetchone()[0]
-    if exists:
-        cursor.executemany(updateQuery, [(username, name, prices[0], prices[1], prices[2], prices[3], ch_id)])
-    else:
-        cursor.executemany(insertQuery, [(username, name, ch_id, prices[0], prices[1], prices[2], prices[3])])
-    conn.commit()
-    conn.close()
+    with DatabaseConnection() as db:
+        conn, cursor = db
+        cursor.execute(existsQuery, [ch_id])
+        exists = cursor.fetchone()[0]
+        if exists:
+            cursor.executemany(updateQuery, [(username, name, prices[0], prices[1], prices[2], prices[3], ch_id)])
+        else:
+            cursor.executemany(insertQuery, [(username, name, ch_id, prices[0], prices[1], prices[2], prices[3])])
+        conn.commit()
     await state.finish()
     if exists:
         await message.answer("Уже существующий канал успешно обновлён!", reply_markup=inline_keyboard(Buttons.back))
@@ -1677,12 +1643,11 @@ async def callback_inline(callback_query: types.CallbackQuery, state: FSMContext
         await admin_promo(callback_query, state)
     elif callback_query.data == Buttons.admin_promo[0].data:
         data = await state.get_data()
-        conn = mysql.connector.connect(host=c.host, user=c.user, passwd=c.password, database=c.db)
-        cursor = conn.cursor(buffered=True)
-        updateQuery = "UPDATE promo SET approved=1 WHERE ID=(%s)"
-        cursor.execute(updateQuery, [data['promo_id']])
-        conn.commit()
-        conn.close()
+        with DatabaseConnection() as db:
+            conn, cursor = db
+            updateQuery = "UPDATE promo SET approved=1 WHERE ID=(%s)"
+            cursor.execute(updateQuery, [data['promo_id']])
+            conn.commit()
         await state.update_data({'promo_id': None})
         await callback_query.answer("Успешно одобрено!", show_alert=True)
     elif callback_query.data == Buttons.admin_promo[1].data:
@@ -1690,14 +1655,13 @@ async def callback_inline(callback_query: types.CallbackQuery, state: FSMContext
         deleteQuery = "DELETE FROM promo WHERE ID=(%s)"
         selectBalanceQuery = "SELECT balance FROM users WHERE user_id=(%s)"
         updateBalanceQuery = "UPDATE users SET balance=(%s) WHERE user_id=(%s)"
-        conn = mysql.connector.connect(host=c.host, user=c.user, passwd=c.password, database=c.db)
-        cursor = conn.cursor(buffered=True)
-        cursor.execute(selectBalanceQuery, [data['promo_user']])
-        balance = cursor.fetchone()[0]
-        cursor.executemany(updateBalanceQuery, [(balance + data['promo_price'], data['promo_user'])])
-        cursor.execute(deleteQuery, [data['promo_id']])
-        conn.commit()
-        conn.close()
+        with DatabaseConnection() as db:
+            conn, cursor = db
+            cursor.execute(selectBalanceQuery, [data['promo_user']])
+            balance = cursor.fetchone()[0]
+            cursor.executemany(updateBalanceQuery, [(balance + data['promo_price'], data['promo_user'])])
+            cursor.execute(deleteQuery, [data['promo_id']])
+            conn.commit()
         await state.update_data({'promo_id': None})
         await callback_query.answer("Успешно отклонено и удалено!", show_alert=True)
 
@@ -1711,19 +1675,18 @@ async def callback_inline(callback_query: types.CallbackQuery, state: FSMContext
 @dp.message_handler(regexp='^\\d+$', state=Admin_ads.ad_id)
 async def search(message: types.Message, state: FSMContext):
     ad_id = int(message.text)
-    conn = mysql.connector.connect(host=c.host, user=c.user, passwd=c.password, database=c.db)
-    cursor = conn.cursor(buffered=True)
-    selectQuery = "SELECT user_id, channel, message_id, created, period FROM ads WHERE ID=(%s)"
-    selectChannelQuery = "SELECT username, name FROM channels WHERE ID=(%s)"
-    cursor.execute(selectQuery, [ad_id])
-    result = cursor.fetchone()
-    if not result:
-        conn.close()
-        await message.answer("Объявление не найдено", reply_markup=inline_keyboard(Buttons.back))
-        return
-    cursor.execute(selectChannelQuery, [result[1]])
-    channel = cursor.fetchone()
-    conn.close()
+    with DatabaseConnection() as db:
+        conn, cursor = db
+        selectQuery = "SELECT user_id, channel, message_id, created, period FROM ads WHERE ID=(%s)"
+        selectChannelQuery = "SELECT username, name FROM channels WHERE ID=(%s)"
+        cursor.execute(selectQuery, [ad_id])
+        result = cursor.fetchone()
+        if not result:
+            conn.close()
+            await message.answer("Объявление не найдено", reply_markup=inline_keyboard(Buttons.back))
+            return
+        cursor.execute(selectChannelQuery, [result[1]])
+        channel = cursor.fetchone()
 
     try:
         await bot.forward_message(message.chat.id, f'@{channel[0]}', result[2])
@@ -1762,12 +1725,11 @@ async def callback_inline(callback_query: types.CallbackQuery, state: FSMContext
         except utils.exceptions.MessageToDeleteNotFound: pass
     elif callback_query.data == Buttons.confirm_delete[0].data:
         data = await state.get_data()
-        conn = mysql.connector.connect(host=c.host, user=c.user, passwd=c.password, database=c.db)
-        cursor = conn.cursor(buffered=True)
-        deleteQuery = "DELETE FROM ads WHERE ID=(%s)"
-        cursor.execute(deleteQuery, [data['ad_id']])
-        conn.commit()
-        conn.close()
+        with DatabaseConnection() as db:
+            conn, cursor = db
+            deleteQuery = "DELETE FROM ads WHERE ID=(%s)"
+            cursor.execute(deleteQuery, [data['ad_id']])
+            conn.commit()
         await callback_query.answer("Удалено!", show_alert=True)
         await admin_menu(callback_query, callback_query.message.message_id)
     elif callback_query.data == Buttons.confirm_delete[1].data:
