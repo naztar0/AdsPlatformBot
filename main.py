@@ -89,6 +89,12 @@ class Admin_ads(StatesGroup):
     back_or_delete = State()
 
 
+@dp.message_handler(regexp=Buttons.reply_restart)
+async def restart(message: types.Message, state: FSMContext):
+    await state.finish()
+    await main_menu(message.chat.id, message.chat.first_name)
+
+
 @dp.message_handler(regexp=Buttons.reply_restart, state=Channels)
 async def restart(message: types.Message, state: FSMContext):
     await state.finish()
@@ -131,17 +137,17 @@ async def restart(message: types.Message, state: FSMContext):
     await main_menu(message.chat.id, message.chat.first_name)
 
 
-def inline_keyboard(buttons_set, back_data=False, arrows=False):
+def inline_keyboard(buttons_set, lang, back_data=False, arrows=False):
     key = types.InlineKeyboardMarkup()
     if arrows:
-        but_1 = types.InlineKeyboardButton(Buttons.arrows[0].title, callback_data=Buttons.arrows[0].data)
-        but_2 = types.InlineKeyboardButton(Buttons.arrows[1].title, callback_data=Buttons.arrows[1].data)
+        but_1 = types.InlineKeyboardButton(lang['prev'], callback_data=Buttons.arrows[0].data)
+        but_2 = types.InlineKeyboardButton(lang['next'], callback_data=Buttons.arrows[1].data)
         key.add(but_1, but_2)
     if isinstance(buttons_set, Button):
         key.add(types.InlineKeyboardButton(buttons_set.title, callback_data=buttons_set.data))
     else:
         for title, data in buttons_set:
-            key.add(types.InlineKeyboardButton(title, callback_data=data))
+            key.add(types.InlineKeyboardButton(lang[data], callback_data=data))
     if back_data:
         key.add(types.InlineKeyboardButton(Buttons.back.title, callback_data=Buttons.back.data))
     return key
@@ -182,6 +188,25 @@ def _media_group_builder(data, caption=True):
     return media
 
 
+def language(user_id):
+    def get_lang():
+        with DatabaseConnection() as db:
+            conn, cursor = db
+            selectQuery = "SELECT lang FROM users WHERE user_id=(%s)"
+            cursor.execute(selectQuery, [user_id])
+            result = cursor.fetchone()
+            if result:
+                return result[0]
+            return 'ru'
+
+    def strings():
+        lang = get_lang()
+        with open('strings.json', encoding='utf-8') as f:
+            data = json.load(f)[lang]
+        return data
+    return strings()
+
+
 def register_user(user_id, phone, location, referral=None):
     with DatabaseConnection() as db:
         conn, cursor = db
@@ -194,8 +219,7 @@ async def request_contact(user_id, first_name):
     key = types.ReplyKeyboardMarkup(resize_keyboard=True)
     key.add(types.KeyboardButton(Buttons.reply_request_contact, request_contact=True))
     await bot.send_message(user_id, f"Здравствуйте, {first_name}.\n"
-                           "Для продолжения, пожалуйста, предоставьте ваш номер телефона при помощи кнопки внизу",
-                           reply_markup=key)
+                           "Для продолжения, пожалуйста, предоставьте ваш номер телефона при помощи кнопки внизу", reply_markup=key)
 
 
 @dp.message_handler(content_types=['contact'])
@@ -234,6 +258,7 @@ async def location_func(message: types.Message, state: FSMContext):
 
 
 async def main_menu(user_id, first_name, delete_message=None, referral=None, state=None):
+    lang = language(user_id)
     register = False
     with DatabaseConnection() as db:
         conn, cursor = db
@@ -252,13 +277,13 @@ async def main_menu(user_id, first_name, delete_message=None, referral=None, sta
             await state.update_data({'referral': referral})
         await request_contact(user_id, first_name)
         return
-    buttons = buttons_cortege(Buttons.main)
+    buttons = buttons_cortege(Buttons.main) ## ДЕЛАЕМ КНОПОЧКИ))) СНОСИМ НАХРЕН СТАРУЮ СИСТЕМУ С NAMEDTUPLE, ВОЗМОЖНО ОСТАВЛЯЕМ МЕНЮ АДМИНА НА НЕЙ
     if admin:
         buttons += (Buttons.main_admin.title, Buttons.main_admin.data),
     key = types.ReplyKeyboardMarkup(resize_keyboard=True)
     key.add(types.KeyboardButton(Buttons.reply_restart))
-    await bot.send_message(user_id, "Главное меню", reply_markup=key)
-    await bot.send_message(user_id, f"Здравствуйте, {first_name}.\nНа вашем балансе: {balance} грн.", reply_markup=inline_keyboard(buttons))
+    await bot.send_message(user_id, lang['main_menu'], reply_markup=key)
+    await bot.send_message(user_id, lang['main_menu_hello'].format(first_name=first_name, balance=balance), reply_markup=inline_keyboard(buttons, lang['buttons']))
     if delete_message:
         try: await bot.delete_message(user_id, delete_message)
         except utils.exceptions.MessageCantBeDeleted: pass
@@ -295,7 +320,8 @@ async def check_search_requests(text, message_id, channel):
         keyword = str(result[1]).replace('_', '\\_').replace('*', '\\*').replace('`', '\\`').replace('[', '\\[')
         if result[1] in text:
             try:
-                await bot.send_message(result[0], f"Новое [объявление](https://t.me/{channel[1:]}/{message_id}) по фразе «{keyword}»", parse_mode="Markdown")
+                lang = language(result[0])
+                await bot.send_message(result[0], lang['new_ad_notification'].format(channel[1:], message_id, keyword), parse_mode="Markdown")
                 await sleep(.1)
             except utils.exceptions.BotBlocked: pass
             except utils.exceptions.UserDeactivated: pass
@@ -303,6 +329,7 @@ async def check_search_requests(text, message_id, channel):
 
 
 async def choose_channel(callback_query):
+    lang = language(callback_query.message.chat.id)
     with DatabaseConnection() as db:
         conn, cursor = db
         selectQuery = "SELECT name, ID FROM channels"
@@ -312,7 +339,7 @@ async def choose_channel(callback_query):
     key = inline_keyboard(buttons, True)
     await Channels.choose.set()
     await callback_query.answer()
-    await callback_query.message.answer("Выберите интересующий вас канал:", reply_markup=key)
+    await callback_query.message.answer(lang['choose_channel'], reply_markup=key)
     try: await bot.delete_message(callback_query.message.chat.id, callback_query.message.message_id)
     except utils.exceptions.MessageCantBeDeleted: pass
 
@@ -326,7 +353,8 @@ def delete_invalid_ad_from_db(message_id, channel):
 
 
 async def proms_choose_mode(callback_query):
-    await callback_query.message.answer("Выберите действие:", reply_markup=inline_keyboard(buttons_cortege(Buttons.make_promo), True))
+    lang = language(callback_query.message.chat.id)
+    await callback_query.message.answer(lang['choose_action'], reply_markup=inline_keyboard(buttons_cortege(Buttons.make_promo), True))
     try: await bot.delete_message(callback_query.message.chat.id, callback_query.message.message_id)
     except utils.exceptions.MessageCantBeDeleted: pass
 
@@ -364,6 +392,7 @@ async def send_promo(callback_query, promo, edit=True, single=False, key=None, p
 
 
 async def watch_proms(callback_query, state, arrow=None):
+    lang = language(callback_query.message.chat.id)
     selectLastTimeQuery = "SELECT last_time FROM promo_time WHERE user_id=(%s)"
     selectPromosAllIdQuery = "SELECT ID FROM promo WHERE approved=1"
     selectPromoQuery = "SELECT text, photo, video FROM promo WHERE ID=(%s)"
@@ -378,7 +407,7 @@ async def watch_proms(callback_query, state, arrow=None):
             if difference < wait_time:
                 conn.close()
                 minutes, seconds = int(wait_time / 60 - difference / 60), int(60 - difference % 60)
-                await callback_query.answer(f"Следующую рекламу можно просмотреть через {minutes} мин. {seconds} сек.")
+                await callback_query.answer(lang['next_promo_watch'].format(minutes=minutes, seconds=seconds))
                 return
         cursor.execute(selectPromosAllIdQuery)
         promos_ids = cursor.fetchall()
@@ -390,7 +419,7 @@ async def watch_proms(callback_query, state, arrow=None):
         promos_ids = [x for x in promos_ids if x[0] not in viewed]
     if not promos_ids:
         await state.finish()
-        await callback_query.answer("Похоже, больше не осталось рекламы для просмотра!", show_alert=True)
+        await callback_query.answer(lang['no_promo_to_watch'], show_alert=True)
         return
     data = await state.get_data()
     last_promo_id = data.get('promo_id')
@@ -428,44 +457,48 @@ async def watch_proms(callback_query, state, arrow=None):
 
 
 async def make_promo(callback_query):
+    lang = language(callback_query.message.chat.id)
     await Make_promo.media.set()
     await callback_query.answer()
-    await callback_query.message.answer("Отправьте/перешлите фото или видео")
+    await callback_query.message.answer(lang['send_media'])
 
 
 async def search_choose_option(callback_query):
-    await callback_query.message.answer("Выберите действие:", reply_markup=inline_keyboard(buttons_cortege(Buttons.search_request), True))
+    lang = language(callback_query.message.chat.id)
+    await callback_query.message.answer(lang['choose_action'], reply_markup=inline_keyboard(buttons_cortege(Buttons.search_request), True))
     try: await bot.delete_message(callback_query.message.chat.id, callback_query.message.message_id)
     except utils.exceptions.MessageCantBeDeleted: pass
 
 
 async def search_my_requests(callback_query):
+    lang = language(callback_query.message.chat.id)
     with DatabaseConnection() as db:
         conn, cursor = db
         selectQuery = "SELECT keyword, created FROM search_requests WHERE user_id=(%s)"
         cursor.execute(selectQuery, [callback_query.message.chat.id])
         result = cursor.fetchall()
     if not result:
-        await callback_query.answer("У вас нет ни одного запроса!")
+        await callback_query.answer(lang['have_not_any_request'])
         return
     text = ''
     for req in result:
-        text += f"Запрос по фразе: {req[0]}\n" \
-                f"Создан: {datetime.datetime.strftime(req[1], '%d.%m.%Y')}\n" \
-                f"Активен до: {datetime.datetime.strftime(req[1] + datetime.timedelta(30), '%d.%m.%Y')}\n\n"
+        text += lang['my_request'].format(req[0], datetime.datetime.strftime(req[1], '%d.%m.%Y'),
+                                          datetime.datetime.strftime(req[1] + datetime.timedelta(30), '%d.%m.%Y'))
     await callback_query.message.answer(text, reply_markup=inline_keyboard(Buttons.back))
     try: await bot.delete_message(callback_query.message.chat.id, callback_query.message.message_id)
     except utils.exceptions.MessageCantBeDeleted: pass
 
 
 async def search_make_requests(callback_query):
+    lang = language(callback_query.message.chat.id)
     await Make_search_request.keyword.set()
-    await callback_query.message.answer("Пожалуйста, введите ключевую фразу")
+    await callback_query.message.answer(lang['input_keyword'])
     try: await bot.delete_message(callback_query.message.chat.id, callback_query.message.message_id)
     except utils.exceptions.MessageCantBeDeleted: pass
 
 
 async def my_ads(callback_query):
+    lang = language(callback_query.message.chat.id)
     with DatabaseConnection() as db:
         conn, cursor = db
         selectQuery = "SELECT channel, message_id, ID, created, period FROM ads WHERE user_id=(%s)"
@@ -474,7 +507,7 @@ async def my_ads(callback_query):
         results = cursor.fetchall()
         if not results:
             conn.close()
-            await callback_query.answer("У вас нет ни одного объявления!")
+            await callback_query.answer(lang['have_not_any_ad'])
             return
         channels = {x[0] for x in results}
         usernames = {}
@@ -485,36 +518,35 @@ async def my_ads(callback_query):
     for ad in results:
         format_channel_name = str(usernames[ad[0]][1]).replace('_', '\\_').replace('*', '\\*').replace('`', '\\`').replace('[', '\\[')
         format_channel_username = str(usernames[ad[0]][0]).replace('_', '\\_')
-        text = \
-            f"[Объявление](https://t.me/{usernames[ad[0]][0]}/{ad[1]}) №{ad[2]}\n" \
-            f"Канал: {format_channel_name} (@{format_channel_username})\n" \
-            f"Создано: {datetime.datetime.strftime(ad[3], '%d.%m.%Y')}\n" \
-            f"Длительность: {ad[4]} дней\n" \
-            f"Активно до: {datetime.datetime.strftime(ad[3] + datetime.timedelta(ad[4]), '%d.%m.%Y')}"
+        text = lang['my_ad'].format(usernames[ad[0]][0], ad[1], ad[2], format_channel_name, format_channel_username,
+                                    datetime.datetime.strftime(ad[3], '%d.%m.%Y'), ad[4],
+                                    datetime.datetime.strftime(ad[3] + datetime.timedelta(ad[4]), '%d.%m.%Y'))
         key = types.InlineKeyboardMarkup()
-        key.add(types.InlineKeyboardButton('Изменить объявление', callback_data=f'editAd_{usernames[ad[0]][2]}_{ad[1]}'))
-        key.add(types.InlineKeyboardButton('Удалить объявление', callback_data=f'delAd_{usernames[ad[0]][2]}_{ad[1]}_{ad[2]}'))
+        key.add(types.InlineKeyboardButton(lang['edit_ad'], callback_data=f'editAd_{usernames[ad[0]][2]}_{ad[1]}'))
+        key.add(types.InlineKeyboardButton(lang['delete_ad'], callback_data=f'delAd_{usernames[ad[0]][2]}_{ad[1]}_{ad[2]}'))
         await bot.send_message(callback_query.message.chat.id, text, reply_markup=key, parse_mode="Markdown")
         await sleep(.05)
 
 
 async def edit_ad(callback_query, state):
+    lang = language(callback_query.message.chat.id)
     data = str(callback_query.data).split('_')
     await My_ads.edit.set()
     await state.update_data({'channel': data[1], 'message_id': data[2]})
-    await callback_query.message.answer("Напишите новый текст объявления")
+    await callback_query.message.answer(lang['edit_ad_input_text'])
 
 
 async def delete_ad(callback_query, state):
+    lang = language(callback_query.message.chat.id)
     data = str(callback_query.data).split('_')
     await My_ads.delete.set()
     await state.update_data({'channel': data[1], 'message_id': data[2], 'ad_id': data[3]})
-    await callback_query.message.answer(
-        f"Вы уверены что хотите удалить объявление №{data[3]} ?\nДеньги за объявление не будут возвращены.",
-        reply_markup=inline_keyboard(buttons_cortege(Buttons.confirm_delete)))
+    await callback_query.message.answer(lang['sure_to_delete_ad'].format(data[3]),
+                                        reply_markup=inline_keyboard(buttons_cortege(Buttons.confirm_delete)))
 
 
 async def my_promos(callback_query, state, edit=False):
+    lang = language(callback_query.message.chat.id)
     data = await state.get_data()
     last_index = data.get('promo_index')
     with DatabaseConnection() as db:
@@ -523,7 +555,7 @@ async def my_promos(callback_query, state, edit=False):
         cursor.execute(selectQuery, [callback_query.message.chat.id])
         result = cursor.fetchall()
     if not result:
-        await callback_query.answer("У вас нет ни одной рекламы!")
+        await callback_query.answer(lang['have_not_any_promo'])
         return
     key = inline_keyboard(Buttons.back, arrows=True)
 
@@ -544,11 +576,9 @@ async def my_promos(callback_query, state, edit=False):
         await My_promos.view.set()
 
     await state.update_data({'promo_index': new_index, 'promo_id': result[new_index][0]})
-    text = f"Реклама №{result[new_index][0]}\n"\
-           f"Создано: {datetime.datetime.strftime(result[new_index][5], '%d.%m.%Y')}\n"\
-           f"Просмотров: {result[new_index][7]}/{result[new_index][6]}\n"\
-           f"Одобрено модератором: {'да' if result[new_index][9] else 'нет'}\n"\
-           f"Содержимое:\n\n{result[new_index][2]}"
+    text = lang['my_promo'].format(result[new_index][0], datetime.datetime.strftime(result[new_index][5], '%d.%m.%Y'),
+                                   result[new_index][7], result[new_index][6], 'да' if result[new_index][9] else 'нет',
+                                   result[new_index][2])
     if edit:
         try:
             if result[new_index][3]:
@@ -558,7 +588,7 @@ async def my_promos(callback_query, state, edit=False):
             else:
                 await bot.edit_message_text(text, callback_query.message.chat.id, callback_query.message.message_id, reply_markup=key)
         except utils.exceptions.MessageNotModified: await callback_query.answer()
-        except utils.exceptions.BadRequest: await callback_query.answer("Не нажимайте так часто!", show_alert=True)
+        except utils.exceptions.BadRequest: await callback_query.answer(lang['warning_frequently_click'], show_alert=True)
     else:
         if result[new_index][3]:
             await bot.send_photo(callback_query.message.chat.id, result[new_index][3], caption=text, reply_markup=key)
@@ -571,6 +601,7 @@ async def my_promos(callback_query, state, edit=False):
 
 
 async def referrals(callback_query):
+    lang = language(callback_query.message.chat.id)
     with DatabaseConnection() as db:
         conn, cursor = db
         countQuery = "SELECT COUNT(ID) FROM users WHERE referral=(%s)"
@@ -581,7 +612,7 @@ async def referrals(callback_query):
         if num:
             cursor.execute(selectBonusQuery, [callback_query.message.chat.id])
             bonus = cursor.fetchone()[0]
-    await callback_query.message.answer(f"*Приглашено пользователей:* {num}\n*Заработано бонусов:* {bonus} грн.\n*Ваша реферальная ссылка:*\n",
+    await callback_query.message.answer(lang['referral'].format(num=num, bonus=bonus),
                                         parse_mode="Markdown", reply_markup=inline_keyboard(Buttons.back))
     await callback_query.message.answer(f"https://t.me/AdvancedAdsBot?start=ref{callback_query.message.chat.id}")
     try: await bot.delete_message(callback_query.message.chat.id, callback_query.message.message_id)
@@ -589,8 +620,9 @@ async def referrals(callback_query):
 
 
 async def top_up_balance(callback_query):
+    lang = language(callback_query.message.chat.id)
     await Top_up_balance.amount.set()
-    await callback_query.message.answer("Введите сумму на которую хотите пополнить баланс:")
+    await callback_query.message.answer(lang['input_amount'])
 
 
 async def admin_privileges(callback_query):
@@ -882,6 +914,7 @@ async def callback_inline(callback_query: types.CallbackQuery, state: FSMContext
 
 
 async def channels_choose(callback_query, state):
+    lang = language(callback_query.message.chat.id)
     selectQuery = "SELECT * FROM channels WHERE ID=(%s)"
     countQuery = "SELECT COUNT(ID) FROM ads WHERE channel=(%s)"
     with DatabaseConnection() as db:
@@ -894,11 +927,11 @@ async def channels_choose(callback_query, state):
                                          'price_1': result[3], 'price_7': result[4], 'price_14': result[5], 'price_30': result[6]}})
     await Channels.next()
     key = types.InlineKeyboardMarkup()
-    key.add(types.InlineKeyboardButton(Buttons.to_channel[0], url=f'https://t.me/{result[1]}'))
-    key.add(types.InlineKeyboardButton(Buttons.to_channel[1], callback_data='place_ad'))
+    key.add(types.InlineKeyboardButton(lang['buttons']['go_to_channel'], url=f'https://t.me/{result[1]}'))
+    key.add(types.InlineKeyboardButton(lang['buttons']['place_ad'], callback_data='place_ad'))
     key.add(types.InlineKeyboardButton(Buttons.back.title, callback_data=Buttons.back.data))
     await callback_query.answer()
-    await callback_query.message.answer(f"Имя канала: {result[2]}\nЮзернейм канала: @{result[1]}\nОбъявлений в канале: {count}", reply_markup=key)
+    await callback_query.message.answer(lang['channel_info'].format(result[2], result[1], count), reply_markup=key)
     try: await bot.delete_message(callback_query.message.chat.id, callback_query.message.message_id)
     except utils.exceptions.MessageCantBeDeleted: pass
 
@@ -911,9 +944,10 @@ async def callback_inline(callback_query: types.CallbackQuery, state: FSMContext
 
 
 async def channels_place_ad(callback_query):
+    lang = language(callback_query.message.chat.id)
     await Channels.next()
     await callback_query.answer()
-    await callback_query.message.answer("Отправьте/перешлите фото, видео или альбом")
+    await callback_query.message.answer(lang['send_media_album'])
 
 
 @dp.callback_query_handler(lambda callback_query: True, state=Channels.place_ad)
@@ -924,26 +958,26 @@ async def callback_inline(callback_query: types.CallbackQuery, state: FSMContext
         await channels_place_ad(callback_query)
 
 
-async def get_caption(message, caption):
+async def get_caption(message, caption, lang):
     if caption:
         if len(caption) < 840:
             return caption
         else:
-            await message.reply("Слишком длинный текст, повторите попытку")
+            await message.reply(lang['warning_text_too_long'])
     else:
-        await message.reply("Медиа без подписи, добавьте подпись")
+        await message.reply(lang['warning_no_caption'])
 
 
 async def period_and_confirm(message, state, period=None, callback_query=None):
+    lang = language(message.chat.id)
     data = await state.get_data()
-    text = f"Имя канала: {data['channel']['name']}\nЮзернейм канала: @{data['channel']['username']}\n"
+    text = lang['channel_info_short'].format(data['channel']['name'], data['channel']['username'])
     if callback_query:
         await state.update_data({'period': period, 'price': data['channel'][f'price_{period}']})
-        text += f"Срок размещения: {period} дней\n" \
-                f"Размещение с: {datetime.datetime.strftime(datetime.datetime.now(), '%d.%m.%Y')}\n" \
-                f"Размещение по: {datetime.datetime.strftime(datetime.datetime.now() + datetime.timedelta(period), '%d.%m.%Y')}\n" \
-                f"Стоимость: {data['channel'][f'price_{period}']} грн.\n"
-    text += f"Содержимое объявления:\n\n{data['media']['caption']}"
+        text += lang['make_ad_info'].format(period, datetime.datetime.strftime(datetime.datetime.now(), '%d.%m.%Y'),
+                                            datetime.datetime.strftime(datetime.datetime.now() + datetime.timedelta(period), '%d.%m.%Y'),
+                                            data['channel'][f'price_{period}'])
+    text += lang['ad_content'].format(data['media']['caption'])
 
     key = types.InlineKeyboardMarkup()
     if callback_query:
@@ -963,13 +997,13 @@ async def period_and_confirm(message, state, period=None, callback_query=None):
             if not callback_query and False:  # отключен предпросмотр медиа
                 media = _media_group_builder(data, caption=False)
                 await bot.send_media_group(message.chat.id, media)
-            await bot.send_message(message.chat.id, text + "\n\n❗ Альбом с медиа: загружен ❗", reply_markup=key)
+            await bot.send_message(message.chat.id, text + lang['album_uploaded'], reply_markup=key)
         elif data['media']['photo']:
             await bot.send_photo(message.chat.id, data['media']['photo'], text, reply_markup=key)
         elif data['media']['video']:
             await bot.send_video(message.chat.id, data['media']['video'], caption=text, reply_markup=key)
         else:
-            await bot.send_message(message.chat.id, text + "\n\n❗ Медиа файлы отсутствуют ❗", reply_markup=key)
+            await bot.send_message(message.chat.id, text + lang['no_media'], reply_markup=key)
     else:
         try:
             if (data['media']['photo'] or data['media']['video']) and not is_media_group:
@@ -977,11 +1011,12 @@ async def period_and_confirm(message, state, period=None, callback_query=None):
             else:
                 await bot.edit_message_text(text, message.chat.id, message.message_id, reply_markup=key)
         except utils.exceptions.MessageNotModified: await callback_query.answer()
-        except utils.exceptions.BadRequest: await callback_query.answer("Не нажимайте так часто!", show_alert=True)
+        except utils.exceptions.BadRequest: await callback_query.answer(lang['warning_frequently_click'], show_alert=True)
 
 
 @dp.message_handler(content_types=['photo', 'video'], state=Channels.media)
 async def media_text(message: types.Message, state: FSMContext):
+    lang = language(message.chat.id)
     photo = video = None
     if message.media_group_id:
         data = await media_group.media_group(message, state)
@@ -995,12 +1030,13 @@ async def media_text(message: types.Message, state: FSMContext):
         video = message.video.file_id
     await state.update_data({'media': {'photo': photo, 'video': video}})
     await Channels.next()
-    await message.answer("Отправьте/перешлите текст объявления")
+    await message.answer(lang['send_ad_text'])
 
 
 @dp.message_handler(content_types=['text'], state=Channels.text)
 async def media_text(message: types.Message, state: FSMContext):
-    text = await get_caption(message, message.text)
+    lang = language(message.chat.id)
+    text = await get_caption(message, message.text, lang)
     if not text:
         return
     data = await state.get_data()
@@ -1009,6 +1045,7 @@ async def media_text(message: types.Message, state: FSMContext):
 
 
 async def publish_to_channel(callback_query, state):
+    lang = language(callback_query.message.chat.id)
     data = await state.get_data()
     selectBalanceQuery = "SELECT balance FROM users WHERE user_id=(%s)"
     selectChannelQuery = "SELECT username FROM channels WHERE ID=(%s)"
@@ -1021,7 +1058,7 @@ async def publish_to_channel(callback_query, state):
         cursor.execute(selectChannelQuery, [data['channel']['ID']])
         channel = cursor.fetchone()[0]
     if balance < data['price']:
-        await callback_query.answer(f"На вашем балансе недостаточно средств. Текущая сумма на балансе: {balance} грн.", show_alert=True)
+        await callback_query.answer(lang['warning_not_enough_money'].format(balance=balance), show_alert=True)
         return
 
     key = inline_keyboard(Buttons.report)
@@ -1047,8 +1084,7 @@ async def publish_to_channel(callback_query, state):
         conn.commit()
 
     await state.finish()
-    await callback_query.message.answer("Ваше объявление создано. Детальнее вы можете посмотреть в меню «Мои объявления»",
-                                        reply_markup=inline_keyboard(Buttons.back_to_menu))
+    await callback_query.message.answer(lang['ad_created'], reply_markup=inline_keyboard(Buttons.back_to_menu))
     try: await bot.delete_message(callback_query.message.chat.id, callback_query.message.message_id)
     except utils.exceptions.MessageCantBeDeleted: pass
     await check_search_requests(data['media']['caption'], m.message_id, channel)
@@ -1072,10 +1108,13 @@ async def callback_inline(callback_query: types.CallbackQuery, state: FSMContext
     if callback_query.data == Buttons.arrows[0].data or callback_query.data == Buttons.arrows[1].data:
         await watch_proms(callback_query, state, callback_query.data)
     elif callback_query.data == Buttons.watch_promo.data:
+        lang = language(callback_query.message.chat.id)
         data = await state.get_data()
         difference = time.time() - data['start_watch']
         wait_time = 20
         if difference > wait_time:  # количество секунд на просмотр рекламы
+            with open('prices.json', 'r') as f:
+                reward = json.load(f)['ad_view']
             existsQuery = "SELECT EXISTS (SELECT ID FROM promo_time WHERE user_id=(%s))"
             insertQuery = "INSERT INTO promo_time (user_id, last_time) VALUES (%s, %s)"
             updateQuery = "UPDATE promo_time SET last_time=(%s) WHERE user_id=(%s)"
@@ -1097,24 +1136,23 @@ async def callback_inline(callback_query: types.CallbackQuery, state: FSMContext
                 else:
                     cursor.executemany(insertQuery, [(callback_query.message.chat.id, int(time.time()))])
                 cursor.executemany(insertViewedQuery, [(callback_query.message.chat.id, data['promo_id'])])
-                cursor.executemany(updateBalanceQuery, [(balance + 1, callback_query.message.chat.id)])
+                cursor.executemany(updateBalanceQuery, [(balance + reward, callback_query.message.chat.id)])
                 cursor.executemany(updateViewsQuery, [(views + 1, data['promo_id'])])
                 conn.commit()
             await state.finish()
-            await callback_query.answer("На ваш баланс зачислено 1 грн.", show_alert=True)
+            await callback_query.answer(lang['got_reward'].format(reward=reward), show_alert=True)
             await main_menu(callback_query.message.chat.id, callback_query.message.chat.first_name, callback_query.message.message_id)
         else:
-            await callback_query.answer(f"Внимательно прочитайте всё содержимое, вы сможете подтвердить просмотр через {int(wait_time - difference)} сек.", show_alert=True)
+            await callback_query.answer(lang['promo_watch_wait'].format(int(wait_time - difference)), show_alert=True)
 
 
-async def views_and_confirm(message, state, views=None, price=None, callback_query=False):
+async def views_and_confirm(message, state, lang, views=None, price=None, callback_query=False):
     data = await state.get_data()
     text = ''
     if callback_query:
         await state.update_data({'views': views, 'price': price})
-        text += f"Просмотров: {views}\n" \
-                f"Стоимость: {price} грн.\n"
-    text += f"Содержимое рекламы:\n\n{data['media']['caption']}"
+        text += lang['views_price'].format(views=views, price=price)
+    text += lang['promo_content'].format(data['media']['caption'])
 
     key = types.InlineKeyboardMarkup()
     if callback_query:
@@ -1131,13 +1169,14 @@ async def views_and_confirm(message, state, views=None, price=None, callback_que
         elif data['media']['video']:
             await bot.send_video(message.chat.id, data['media']['video'], caption=text, reply_markup=key)
         else:
-            await bot.send_message(message.chat.id, text + "\n\n❗ Медиа файлы отсутствуют ❗", reply_markup=key)
+            await bot.send_message(message.chat.id, text + lang['no_media'], reply_markup=key)
     else:
         await bot.edit_message_caption(message.chat.id, message.message_id, caption=text, reply_markup=key)
 
 
 @dp.message_handler(content_types=['photo', 'video'], state=Make_promo.media)
 async def media_text(message: types.Message, state: FSMContext):
+    lang = language(message.chat.id)
     photo = video = None
     if message.photo:
         photo = message.photo[-1].file_id
@@ -1145,20 +1184,22 @@ async def media_text(message: types.Message, state: FSMContext):
         video = message.video.file_id
     await state.update_data({'media': {'photo': photo, 'video': video}})
     await Make_promo.next()
-    await message.answer("Отправьте/перешлите текст объявления")
+    await message.answer(lang['send_promo_text'])
 
 
 @dp.message_handler(content_types=['text'], state=Make_promo.text)
 async def media_text(message: types.Message, state: FSMContext):
-    text = await get_caption(message, message.text)
+    lang = language(message.chat.id)
+    text = await get_caption(message, message.text, lang)
     if not text:
         return
     data = await state.get_data()
     await state.update_data({'media': {'photo': data['media']['photo'], 'video': data['media']['video'], 'caption': text}})
-    await views_and_confirm(message, state)
+    await views_and_confirm(message, state, lang)
 
 
 async def publish_ad(callback_query, state):
+    lang = language(callback_query.message.chat.id)
     data = await state.get_data()
     selectBalanceQuery = "SELECT balance FROM users WHERE user_id=(%s)"
     insertQuery = "INSERT INTO promo (user_id, text, photo, video, required_views, paid) VALUES (%s, %s, %s, %s, %s, %s)"
@@ -1169,7 +1210,7 @@ async def publish_ad(callback_query, state):
         balance = cursor.fetchone()[0]
         if balance < data['price']:
             conn.close()
-            await callback_query.answer(f"На вашем балансе недостаточно средств. Текущая сумма на балансе: {balance} грн.", show_alert=True)
+            await callback_query.answer(lang['warning_not_enough_money'].format(balance=balance), show_alert=True)
             return
         cursor.executemany(insertQuery, [(callback_query.message.chat.id, data['media']['caption'], data['media']['photo'],
                                           data['media']['video'], data['views'], data['price'])])
@@ -1177,8 +1218,7 @@ async def publish_ad(callback_query, state):
         conn.commit()
 
     await state.finish()
-    await callback_query.message.answer("Ваша реклама создана. Детальнее вы можете посмотреть в меню «Мои рекламы»",
-                                        reply_markup=inline_keyboard(Buttons.back_to_menu))
+    await callback_query.message.answer(lang['promo_created'], reply_markup=inline_keyboard(Buttons.back_to_menu))
     try: await bot.delete_message(callback_query.message.chat.id, callback_query.message.message_id)
     except utils.exceptions.MessageCantBeDeleted: pass
 
@@ -1190,17 +1230,19 @@ async def callback_inline(callback_query: types.CallbackQuery, state: FSMContext
     with open('prices.json', 'r') as f:
         price = json.load(f)['views']
     if callback_query.data in price.keys():
+        lang = language(callback_query.message.chat.id)
         views = callback_query.data
-        await views_and_confirm(callback_query.message, state, int(views[1:]), price[views], True)
+        await views_and_confirm(callback_query.message, state, lang, int(views[1:]), price[views], True)
     elif callback_query.data == Buttons.make_ad[0].data:
         await publish_ad(callback_query, state)
 
 
 @dp.message_handler(content_types=['text'], state=Make_search_request.keyword)
 async def search(message: types.Message, state: FSMContext):
+    lang = language(message.chat.id)
     keyword = message.text
     if len(keyword) > 30:
-        await message.reply("Слишком длинная фраза, разрешено не более 40 символов")
+        await message.reply(lang['warning_keyword_too_long'])
         return
     await state.update_data({'keyword': keyword, 'ad_index': 0})
     await Make_search_request.next()
@@ -1215,16 +1257,17 @@ async def search(message: types.Message, state: FSMContext):
             cursor.execute(selectChannelQuery, [result[0][0]])
             channel = cursor.fetchone()[0]
     if result:
-        await message.answer(f"[Объявление](https://t.me/{channel}/{result[0][1]})", parse_mode="Markdown",
+        await message.answer(lang['ad_link'].format(channel, result[0][1]), parse_mode="Markdown",
                              reply_markup=inline_keyboard(Buttons.on_notifications, back_data=True, arrows=True))
     else:
-        await message.reply(f"По запросу «{keyword}» ничего не найдено", reply_markup=inline_keyboard(Buttons.on_notifications, back_data=True))
+        await message.reply(lang['search_no_results'].format(keyword=keyword), reply_markup=inline_keyboard(Buttons.on_notifications, back_data=True))
 
 
 @dp.callback_query_handler(lambda callback_query: True, state=Make_search_request.view)
 async def callback_inline(callback_query: types.CallbackQuery, state: FSMContext):
     if await _back(callback_query, state, search_choose_option, callback_query):
         return
+    lang = language(callback_query.message.chat.id)
     data = await state.get_data()
     if callback_query.data == Buttons.arrows[0].data or callback_query.data == Buttons.arrows[1].data:
         edit = data.get('edit')
@@ -1238,7 +1281,7 @@ async def callback_inline(callback_query: types.CallbackQuery, state: FSMContext
             result = cursor.fetchall()
             if not result:
                 conn.close()
-                await callback_query.answer("Объявление не найдено", show_alert=True)
+                await callback_query.answer(lang['warning_ad_not_found'], show_alert=True)
                 return
             length = len(result)
             if callback_query.data == Buttons.arrows[0].data:
@@ -1256,13 +1299,13 @@ async def callback_inline(callback_query: types.CallbackQuery, state: FSMContext
             channel = cursor.fetchone()[0]
 
         await state.update_data({'ad_index': new_index, 'edit': True})
-        text = f"[Объявление](https://t.me/{channel}/{result[new_index][1]})"
+        text = lang['ad_link'].format(channel, result[new_index][1])
         if edit:
             try:
                 await bot.edit_message_text(text, callback_query.message.chat.id, callback_query.message.message_id,
                                             reply_markup=inline_keyboard(Buttons.on_notifications, back_data=True, arrows=True), parse_mode="Markdown")
             except utils.exceptions.MessageNotModified: await callback_query.answer()
-            except utils.exceptions.BadRequest: await callback_query.answer("Не нажимайте так часто!", show_alert=True)
+            except utils.exceptions.BadRequest: await callback_query.answer(lang['warning_frequently_click'], show_alert=True)
         else:
             await bot.send_message(callback_query.message.chat.id, text,
                                    reply_markup=inline_keyboard(Buttons.on_notifications, back_data=True, arrows=True), parse_mode="Markdown")
@@ -1272,14 +1315,14 @@ async def callback_inline(callback_query: types.CallbackQuery, state: FSMContext
     elif callback_query.data == Buttons.on_notifications.data:
         with open('prices.json', 'r') as f:
             price = json.load(f)['notify']
-        await callback_query.message.answer(f"Оповещения о новых объявлениях по фразе «{data['keyword']}» будут включены на 30 дней.\nСтоимость: {price} грн.",
+        await callback_query.message.answer(lang['turn_on_notifications'].format(data['keyword'], price),
                                             reply_markup=inline_keyboard(Buttons.pay_confirm, True))
         try:
             last_message_id = callback_query.message.message_id
             await bot.delete_message(callback_query.message.chat.id, last_message_id)
             await bot.delete_message(callback_query.message.chat.id, last_message_id - 1)
         except utils.exceptions.MessageCantBeDeleted: pass
-        except utils.exceptions.MessageToDeleteNotFound: await callback_query.answer("Не нажимайте так часто!", show_alert=True)
+        except utils.exceptions.MessageToDeleteNotFound: await callback_query.answer(lang['warning_frequently_click'], show_alert=True)
     elif callback_query.data == Buttons.pay_confirm.data:
         with open('prices.json', 'r') as f:
             price = json.load(f)['notify']
@@ -1292,13 +1335,13 @@ async def callback_inline(callback_query: types.CallbackQuery, state: FSMContext
             balance = cursor.fetchone()[0]
             if balance < price:
                 conn.close()
-                await callback_query.answer(f"На вашем балансе недостаточно средств. Текущая сумма на балансе: {balance} грн.", show_alert=True)
+                await callback_query.answer(lang['warning_not_enough_money'].format(balance=balance), show_alert=True)
                 return
             cursor.executemany(insertQuery, [(callback_query.message.chat.id, data['keyword'])])
             cursor.executemany(updateBalanceQuery, [(balance - price, callback_query.message.chat.id)])
             conn.commit()
         await state.finish()
-        await callback_query.message.answer(f"Оповещения по фразе «{data['keyword']}» подключены на 30 дней. Детальнее вы можете посмотреть в меню «Поиск - Мои запросы»",
+        await callback_query.message.answer(lang['notifications_activated'].format(data['keyword']),
                                             reply_markup=inline_keyboard(Buttons.back_to_menu))
         try: await bot.delete_message(callback_query.message.chat.id, callback_query.message.message_id)
         except utils.exceptions.MessageCantBeDeleted: pass
@@ -1306,7 +1349,8 @@ async def callback_inline(callback_query: types.CallbackQuery, state: FSMContext
 
 @dp.message_handler(content_types=['text'], state=My_ads.edit)
 async def message_handler(message: types.Message, state: FSMContext):
-    text = await get_caption(message, message.text)
+    lang = language(message.chat.id)
+    text = await get_caption(message, message.text, lang)
     if not isinstance(text, str):
         return
     data = await state.get_data()
@@ -1315,12 +1359,13 @@ async def message_handler(message: types.Message, state: FSMContext):
     except utils.exceptions.BadRequest:
         try: await bot.edit_message_text(text, data['channel'], data['message_id'])
         except utils.exceptions.BadRequest: pass
-    await message.answer("Успешно изменено")
+    await message.answer(lang['edited'])
     await main_menu(message.chat.id, message.chat.first_name)
 
 
 @dp.callback_query_handler(lambda callback_query: True, state=My_ads.delete)
 async def callback_inline(callback_query: types.CallbackQuery, state: FSMContext):
+    lang = language(callback_query.message.chat.id)
     if callback_query.data == Buttons.confirm_delete[0].data:
         data = await state.get_data()
         await state.finish()
@@ -1334,18 +1379,18 @@ async def callback_inline(callback_query: types.CallbackQuery, state: FSMContext
             conn.commit()
         try:
             await bot.delete_message(data['channel'], data['message_id'])
-            await callback_query.answer("Удалено!", show_alert=True)
+            await callback_query.answer(lang['deleted'], show_alert=True)
         except utils.exceptions.MessageToDeleteNotFound: pass
         except utils.exceptions.MessageCantBeDeleted:
             for admin in admins:
                 await bot.forward_message(admin[0], data['channel'], data['message_id'])
                 await bot.send_message(admin[0], "Удалите это объявление вручную")
                 await sleep(.1)
-            await callback_query.answer("Администрация скоро удалит ваше объявление!", show_alert=True)
+            await callback_query.answer(lang['will_be_deleted_soon'], show_alert=True)
         await main_menu(callback_query.message.chat.id, callback_query.message.chat.first_name)
     elif callback_query.data == Buttons.confirm_delete[1].data:
         await state.finish()
-        await callback_query.answer("Отменено")
+        await callback_query.answer(lang['canceled'])
         await main_menu(callback_query.message.chat.id, callback_query.message.chat.first_name)
 
 
@@ -1365,22 +1410,22 @@ async def callback_inline(callback_query: types.CallbackQuery, state: FSMContext
 
 @dp.message_handler(regexp='^\\d+$', state=Top_up_balance.amount)
 async def search(message: types.Message, state: FSMContext):
+    lang = language(message.chat.id)
     amount = int(message.text)
     if amount < 1 or amount > 1000000:
-        await message.reply("Недействительная сумма!")
+        await message.reply(lang['warning_bad_amount'])
         return
     await state.finish()
     pay_link = pay.way_for_pay_request_purchase(message.chat.id, amount)
     if isinstance(pay_link, tuple):
         print("Error: %s" % pay_link[1])
-        await message.answer("Извините, произошла ошибка, повторите попытку позже")
+        await message.answer(lang['warning_payment_error'])
         await message.answer("Error: %s" % pay_link[1])
         return
     key = types.InlineKeyboardMarkup()
-    key.add(types.InlineKeyboardButton("Оплатить", url=pay_link))
+    key.add(types.InlineKeyboardButton(lang['pay'], url=pay_link))
     key.add(types.InlineKeyboardButton(Buttons.back.title, callback_data=Buttons.back.data))
-    await message.answer(f"Ваш баланс будет пополнен на {amount} грн. Чтобы оплатить используйте кнопку ниже.\n"
-                         "После оплаты бот автоматически обработает платёж.", reply_markup=key)
+    await message.answer(lang['top_up_balance'].format(amount=amount), reply_markup=key)
 
 
 @dp.callback_query_handler(lambda callback_query: True, state=Admin_privileges.user_id)
