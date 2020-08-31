@@ -586,7 +586,7 @@ async def my_promos(callback_query, state, edit=False):
 
     await state.update_data({'promo_index': new_index, 'promo_id': result[new_index][0]})
     text = lang['my_promo'].format(result[new_index][0], datetime.datetime.strftime(result[new_index][5], '%d.%m.%Y'),
-                                   result[new_index][7], result[new_index][6], 'да' if result[new_index][9] else 'нет',
+                                   result[new_index][7], result[new_index][6], '+' if result[new_index][9] else '-',
                                    result[new_index][2])
     if edit:
         try:
