@@ -11,20 +11,19 @@ class Buttons:
         'my_promos', \
         'referrals', \
         'top_up_balance'
-    main_admin = Button('Меню администратора', 'admin_menu')
-    back_to_menu = Button('Вернуться в главное меню', 'main_menu')
-    back = Button('Назад', 'back')
-    to_channel = Button('Перейти в канал', 'go_to_channel'), Button('Разместить объявление', 'place_ad')
-    make_ad = Button('ОПЛАТИТЬ И РАЗМЕСТИТЬ', 'confirm_place'),  Button('1 день', '1'), Button('7 дней', '7'),  Button('14 дней', '14'), Button('30 дней', '30')
-    make_promo = Button('Просмотреть рекламу', 'watch_promo'),  Button('Создать рекламу', 'create_promo')
-    arrows = Button('⬅', 'prev'), Button('➡', 'next')
-    watch_promo = Button('Просмотреть', 'view_confirm')
-    views_count = Button('1000 просмотров', '_1000'), Button('5000 просмотров', '_5000')
-    search_request = Button('Мои запросы', 'my_search_requests'), Button('Создать запрос', 'make_search_request')
-    on_notifications = Button('Включить оповещения для фразы', 'on_notify')
-    pay_confirm = Button('Подтвердить оплату', 'confirm_pay')
-    delete_ad = Button('Удалить объявление', 'delete_ad')
-    confirm_delete = Button('Да, удалить', 'delete_ad_confirm'), Button('Нет, отменить', 'delete_back')
+    main_admin = 'admin_menu'
+    back_to_menu = 'main_menu'
+    back = 'back'
+    to_channel = 'go_to_channel', 'place_ad'
+    make_ad = 'confirm_place', '1', '7', '14', '30'
+    make_promo = 'watch_promo',  'create_promo'
+    watch_promo = 'view_confirm'
+    views_count = '_1000', '_5000'
+    search_request = 'my_search_requests', 'make_search_request'
+    on_notifications = 'on_notify'
+    pay_confirm = 'confirm_pay'
+    delete_ad = 'delete_ad'
+    confirm_delete = 'delete_ad_confirm', 'delete_back'
     admin = \
         Button('Привилегии', 'admin_privileges'), \
         Button('Каналы', 'admin_channels'), \
@@ -45,6 +44,11 @@ class Buttons:
         Button('5', 'set_5'), Button('6', 'set_6')
     admin_promo = Button('Одобрить', 'approve'), Button('Отклонить', 'reject')
     report = Button('Жалоба', 'report')
-    reply_restart = '🏠 Главное меню'
+    arrows = Button('⬅', 'prev'), Button('➡', 'next')
+    back_but = Button('Назад', 'back')
+    back_to_menu_but = Button('Вернуться в главное меню', 'main_menu')
+    delete_ad_but = Button('Удалить объявление', 'delete_ad')
+    confirm_delete_but = Button('Да, удалить', 'delete_ad_confirm'), Button('Нет, отменить', 'delete_back')
+    regexp_restart = '^(🏠 Главное меню|🏠 Головне меню)$'
     reply_request_contact = 'Поделиться контактом'
     reply_request_location = 'Поделиться местоположением'

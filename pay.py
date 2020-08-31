@@ -18,10 +18,10 @@ def way_for_pay_request_purchase(user_id, amount):
     hash_signature = hmac.new(secret, str_signature, 'MD5').hexdigest()
     res = requests.post(way_for_pay_url, json={
         'transactionType': 'CREATE_INVOICE',
-        'merchantAccount': {way_for_pay_merchant_id},
+        'merchantAccount': way_for_pay_merchant_id,
         'merchantAuthType': 'SimpleSignature',
         'apiVersion': 1,
-        'merchantDomainName': {way_for_pay_merchant_domain_name},
+        'merchantDomainName': way_for_pay_merchant_domain_name,
         'merchantTransactionSecureType': 'AUTO',
         'merchantSignature': hash_signature,
         'serviceUrl': way_for_pay_service_url,
