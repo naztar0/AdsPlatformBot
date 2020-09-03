@@ -9,6 +9,7 @@
     "channel_info_short": "Имя канала: {}\nЮзернейм канала: @{}\n",
     "choose_action": "Выберите действие:",
     "choose_channel": "Выберите интересующий вас канал:",
+    "choose_language": "Выберите язык",
     "delete_ad": "Удалить объявление",
     "deleted": "Удалено!",
     "edit_ad": "Изменить объявление",
@@ -37,6 +38,7 @@
     "promo_watch_wait": "Внимательно прочитайте всё содержимое, вы сможете подтвердить просмотр через {} сек.",
     "referral": "*Приглашено пользователей:* {num}\n*Заработано бонусов:* {bonus} грн.\n*Ваша реферальная ссылка:*\n",
     "search_no_results": "По запросу «{keyword}» ничего не найдено",
+    "selected_language": "Выбран русский язык",
     "send_ad_text": "Отправьте/перешлите текст объявления",
     "send_media": "Отправьте/перешлите фото или видео",
     "send_media_album": "Отправьте/перешлите фото, видео или альбом",
@@ -84,6 +86,7 @@
       "delete_ad": "Удалить объявление",
       "delete_ad_confirm": "Да, удалить",
       "delete_back": "Нет, отменить",
+      "change_language": "Язык",
       "reply_restart": "🏠 Главное меню"
     }
   },
@@ -97,6 +100,7 @@
     "channel_info_short": "Назва каналу: {}\nЮзернейм каналу: @{}\n",
     "choose_action": "Оберіть дію:",
     "choose_channel": "Оберіть потрібний вам канал:",
+    "choose_language": "Оберіть мову",
     "delete_ad": "Видалити оголошення",
     "deleted": "Видалено!",
     "edit_ad": "Змінити оголошення",
@@ -125,6 +129,7 @@
     "promo_watch_wait": "Уважно прочитайте весь зміст, ви зможете підтвердити перегляд через {} сек.",
     "referral": "*Запрошено користувачів:* {num}\n*Зароблено бонусів:* {bonus} грн.\n*Ваше реферальне посилання:*\n",
     "search_no_results": "По запиту «{keyword}» нічого не знайдено",
+    "selected_language": "Обрана українська мова",
     "send_ad_text": "Відправте/перешліть текст оголошення",
     "send_media": "Відправте/перешліть фото або відео",
     "send_media_album": "Відправте/перешліть фото, відео або альбом",
@@ -172,6 +177,7 @@
       "delete_ad": "Видалити оголошення",
       "delete_ad_confirm": "Так, видалити",
       "delete_back": "Ні, відмнінити",
+      "change_language": "Мова",
       "reply_restart": "🏠 Головне меню"
     }
   },
@@ -185,6 +191,7 @@
     "channel_info_short": "Channel name: {}\nChannel username: @{}\n",
     "choose_action": "Choose action:",
     "choose_channel": "Select the channel you are interested in:",
+    "choose_language": "Choose language",
     "delete_ad": "Delete announcement",
     "deleted": "Deleted!",
     "edit_ad": "Edit announcement",
@@ -213,6 +220,7 @@
     "promo_watch_wait": "Read all contents carefully, you can confirm view in {} sec.",
     "referral": "*Users invited:* {num}\n*Bonuses earned:* {bonus} UAH.\n*Your referral link:*\n",
     "search_no_results": "Nothing found by «{keyword}» request",
+    "selected_language": "English selected",
     "send_ad_text": "Send/forward announcement text",
     "send_media": "Send/forward photo or video",
     "send_media_album": "Send/forward photo, video or album",
@@ -260,6 +268,7 @@
       "delete_ad": "Delete announcement",
       "delete_ad_confirm": "Yes, delete",
       "delete_back": "No, cancel",
+      "change_language": "Language",
       "reply_restart": "🏠 Main menu"
     }
   }

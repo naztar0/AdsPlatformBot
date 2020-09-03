@@ -55,12 +55,16 @@ class My_ads(StatesGroup):
     delete = State()
 
 
-class My_promos(StatesGroup):
-    view = State()
+# class My_promos(StatesGroup):
+#    view = State()
 
 
 class Top_up_balance(StatesGroup):
     amount = State()
+
+
+class Choose_language(StatesGroup):
+    choose = State()
 
 
 class Admin_privileges(StatesGroup):
@@ -125,10 +129,10 @@ async def restart(message: types.Message, state: FSMContext):
     await main_menu(message.chat.id, message.chat.first_name)
 
 
-@dp.message_handler(regexp=Buttons.regexp_restart, state=My_promos)
-async def restart(message: types.Message, state: FSMContext):
-    await state.finish()
-    await main_menu(message.chat.id, message.chat.first_name)
+# @dp.message_handler(regexp=Buttons.regexp_restart, state=My_promos)
+# async def restart(message: types.Message, state: FSMContext):
+#    await state.finish()
+#    await main_menu(message.chat.id, message.chat.first_name)
 
 
 @dp.message_handler(regexp=Buttons.regexp_restart, state=Top_up_balance)
@@ -524,6 +528,7 @@ async def my_ads(callback_query):
             cursor.execute(selectChannelQuery, [ch])
             usernames[ch] = cursor.fetchone()
 
+    await callback_query.answer()
     for ad in results:
         format_channel_name = str(usernames[ad[0]][1]).replace('_', '\\_').replace('*', '\\*').replace('`', '\\`').replace('[', '\\[')
         format_channel_username = str(usernames[ad[0]][0]).replace('_', '\\_')
@@ -542,6 +547,7 @@ async def edit_ad(callback_query, state):
     data = str(callback_query.data).split('_')
     await My_ads.edit.set()
     await state.update_data({'channel': data[1], 'message_id': data[2]})
+    await callback_query.answer()
     await callback_query.message.answer(lang['edit_ad_input_text'])
 
 
@@ -550,63 +556,34 @@ async def delete_ad(callback_query, state):
     data = str(callback_query.data).split('_')
     await My_ads.delete.set()
     await state.update_data({'channel': data[1], 'message_id': data[2], 'ad_id': data[3]})
+    await callback_query.answer()
     await callback_query.message.answer(lang['sure_to_delete_ad'].format(data[3]),
                                         reply_markup=inline_keyboard(Buttons.confirm_delete, lang['buttons']))
 
 
-async def my_promos(callback_query, state, edit=False):
+async def my_promos(callback_query):
     lang = language(callback_query.message.chat.id)
-    data = await state.get_data()
-    last_index = data.get('promo_index')
     with DatabaseConnection() as db:
         conn, cursor = db
         selectQuery = "SELECT * FROM promo WHERE user_id=(%s)"
         cursor.execute(selectQuery, [callback_query.message.chat.id])
-        result = cursor.fetchall()
-    if not result:
+        results = cursor.fetchall()
+    if not results:
         await callback_query.answer(lang['have_not_any_promo'])
         return
-    key = inline_keyboard(Buttons.back, lang['buttons'], arrows=True)
+    key = None  # If will be wish to make edit/delete buttons in future :)
 
-    new_index = 0
-    if last_index is not None:
-        length = len(result)
-        if callback_query.data == Buttons.arrows[0].data:
-            if last_index == 0 or last_index > length - 1:
-                new_index = length - 1
-            else:
-                new_index = last_index - 1
-        else:
-            if last_index >= length - 1:
-                new_index = 0
-            else:
-                new_index = last_index + 1
-    else:
-        await My_promos.view.set()
-
-    await state.update_data({'promo_index': new_index, 'promo_id': result[new_index][0]})
-    text = lang['my_promo'].format(result[new_index][0], datetime.datetime.strftime(result[new_index][5], '%d.%m.%Y'),
-                                   result[new_index][7], result[new_index][6], '+' if result[new_index][9] else '-',
-                                   result[new_index][2])
-    if edit:
-        try:
-            if result[new_index][3]:
-                await bot.edit_message_media(types.InputMediaPhoto(result[new_index][3], caption=text), callback_query.message.chat.id, callback_query.message.message_id, reply_markup=key)
-            elif result[new_index][4]:
-                await bot.edit_message_media(types.InputMediaVideo(result[new_index][4], caption=text), callback_query.message.chat.id, callback_query.message.message_id, reply_markup=key)
-            else:
-                await bot.edit_message_text(text, callback_query.message.chat.id, callback_query.message.message_id, reply_markup=key)
-        except utils.exceptions.MessageNotModified: await callback_query.answer()
-        except utils.exceptions.BadRequest: await callback_query.answer(lang['warning_frequently_click'], show_alert=True)
-    else:
-        if result[new_index][3]:
-            await bot.send_photo(callback_query.message.chat.id, result[new_index][3], caption=text, reply_markup=key)
-        elif result[new_index][4]:
-            await bot.send_video(callback_query.message.chat.id, result[new_index][4], caption=text, reply_markup=key)
+    await callback_query.answer()
+    for promo in results:
+        text = lang['my_promo'].format(promo[0], datetime.datetime.strftime(promo[5], '%d.%m.%Y'),
+                                       promo[7], promo[6], '+' if promo[9] else '-', promo[2])
+        if promo[3]:
+            await bot.send_photo(callback_query.message.chat.id, promo[3], caption=text, reply_markup=key)
+        elif promo[4]:
+            await bot.send_video(callback_query.message.chat.id, promo[4], caption=text, reply_markup=key)
         else:
             await bot.send_message(callback_query.message.chat.id, text, reply_markup=key)
-        try: await bot.delete_message(callback_query.message.chat.id, callback_query.message.message_id)
-        except utils.exceptions.MessageCantBeDeleted: pass
+        await sleep(.05)
 
 
 async def referrals(callback_query):
@@ -632,6 +609,15 @@ async def top_up_balance(callback_query):
     lang = language(callback_query.message.chat.id)
     await Top_up_balance.amount.set()
     await callback_query.message.answer(lang['input_amount'])
+
+
+async def change_language(callback_query):
+    lang = language(callback_query.message.chat.id)
+    buttons = Buttons.languages + (Button(lang['buttons']['back'], 'back'), )
+    await Choose_language.choose.set()
+    await callback_query.message.answer(lang['choose_language'], reply_markup=inline_keyboard(buttons))
+    try: await bot.delete_message(callback_query.message.chat.id, callback_query.message.message_id)
+    except utils.exceptions.MessageCantBeDeleted: pass
 
 
 async def admin_privileges(callback_query):
@@ -868,54 +854,57 @@ async def admin_delete_message(callback_query):
 
 @dp.callback_query_handler(lambda callback_query: True)
 async def callback_inline(callback_query: types.CallbackQuery, state: FSMContext):
-    if callback_query.data == Buttons.back or callback_query.data == Buttons.back_to_menu:
+    callback_query_data = callback_query.data
+    if callback_query_data == Buttons.back or callback_query_data == Buttons.back_to_menu:
         await main_menu(callback_query.message.chat.id, callback_query.message.chat.first_name, delete_message=callback_query.message.message_id)
 
-    elif callback_query.data == Buttons.main[0]:
+    elif callback_query_data == Buttons.main[0]:
         await choose_channel(callback_query)
-    elif callback_query.data == Buttons.main[1]:
+    elif callback_query_data == Buttons.main[1]:
         await proms_choose_mode(callback_query)
-    elif callback_query.data == Buttons.main[2]:
+    elif callback_query_data == Buttons.main[2]:
         await search_choose_option(callback_query)
-    elif callback_query.data == Buttons.main[3]:
+    elif callback_query_data == Buttons.main[3]:
         await my_ads(callback_query)
-    elif callback_query.data == Buttons.main[4]:
-        await my_promos(callback_query, state)
-    elif callback_query.data == Buttons.main[5]:
+    elif callback_query_data == Buttons.main[4]:
+        await my_promos(callback_query)
+    elif callback_query_data == Buttons.main[5]:
         await referrals(callback_query)
-    elif callback_query.data == Buttons.main[6]:
+    elif callback_query_data == Buttons.main[6]:
         await top_up_balance(callback_query)
+    elif callback_query_data == Buttons.main[7]:
+        await change_language(callback_query)
 
-    elif callback_query.data == Buttons.make_promo[0]:
+    elif callback_query_data == Buttons.make_promo[0]:
         await watch_proms(callback_query, state)
-    elif callback_query.data == Buttons.make_promo[1]:
+    elif callback_query_data == Buttons.make_promo[1]:
         await make_promo(callback_query)
-    elif callback_query.data == Buttons.search_request[0]:
+    elif callback_query_data == Buttons.search_request[0]:
         await search_my_requests(callback_query)
-    elif callback_query.data == Buttons.search_request[1]:
+    elif callback_query_data == Buttons.search_request[1]:
         await search_make_requests(callback_query)
 
-    elif callback_query.data == Buttons.main_admin:
+    elif callback_query_data == Buttons.main_admin:
         await admin_menu(callback_query, callback_query.message.message_id)
-    elif callback_query.data == Buttons.admin[0].data:
+    elif callback_query_data == Buttons.admin[0].data:
         await admin_privileges(callback_query)
-    elif callback_query.data == Buttons.admin[1].data:
+    elif callback_query_data == Buttons.admin[1].data:
         await admin_channels(callback_query, state)
-    elif callback_query.data == Buttons.admin[2].data:
+    elif callback_query_data == Buttons.admin[2].data:
         await admin_settings(callback_query)
-    elif callback_query.data == Buttons.admin[3].data:
+    elif callback_query_data == Buttons.admin[3].data:
         await admin_promo(callback_query, state)
-    elif callback_query.data == Buttons.admin[4].data:
+    elif callback_query_data == Buttons.admin[4].data:
         await admin_ads(callback_query)
 
-    elif callback_query.data == Buttons.report.data:
+    elif callback_query_data == Buttons.report.data:
         await report_send(callback_query)
-    elif callback_query.data[:6] == 'delRep':
+    elif callback_query_data[:6] == 'delRep':
         await admin_delete_message(callback_query)
 
-    elif callback_query.data[:6] == 'editAd':
+    elif callback_query_data[:6] == 'editAd':
         await edit_ad(callback_query, state)
-    elif callback_query.data[:5] == 'delAd':
+    elif callback_query_data[:5] == 'delAd':
         await delete_ad(callback_query, state)
 
 
@@ -1403,14 +1392,6 @@ async def callback_inline(callback_query: types.CallbackQuery, state: FSMContext
         await main_menu(callback_query.message.chat.id, callback_query.message.chat.first_name)
 
 
-@dp.callback_query_handler(lambda callback_query: True, state=My_promos.view)
-async def callback_inline(callback_query: types.CallbackQuery, state: FSMContext):
-    if await _back(callback_query, state, main_menu, callback_query.message.chat.id, callback_query.message.chat.first_name, callback_query.message.message_id):
-        return
-    if callback_query.data == Buttons.arrows[0].data or callback_query.data == Buttons.arrows[1].data:
-        await my_promos(callback_query, state, edit=True)
-
-
 @dp.callback_query_handler(lambda callback_query: True, state=Top_up_balance.amount)
 async def callback_inline(callback_query: types.CallbackQuery, state: FSMContext):
     if await _back(callback_query, state, main_menu, callback_query.message.chat.id, callback_query.message.chat.first_name, callback_query.message.message_id):
@@ -1435,6 +1416,29 @@ async def search(message: types.Message, state: FSMContext):
     key.add(types.InlineKeyboardButton(lang['pay'], url=pay_link))
     key.add(types.InlineKeyboardButton(lang['buttons'][Buttons.back], callback_data=Buttons.back))
     await message.answer(lang['top_up_balance'].format(amount=amount), reply_markup=key)
+
+
+@dp.callback_query_handler(lambda callback_query: True, state=Choose_language.choose)
+async def callback_inline(callback_query: types.CallbackQuery, state: FSMContext):
+    if await _back(callback_query, state, main_menu, callback_query.message.chat.id, callback_query.message.chat.first_name, callback_query.message.message_id):
+        return
+    await state.finish()
+    updateQuery = "UPDATE users SET lang=(%s) WHERE user_id=(%s)"
+    lang = 'ru'
+    if callback_query.data == Buttons.languages[0].data:
+        lang = 'ru'
+    elif callback_query.data == Buttons.languages[1].data:
+        lang = 'ua'
+    elif callback_query.data == Buttons.languages[2].data:
+        lang = 'en'
+    with DatabaseConnection() as db:
+        conn, cursor = db
+        cursor.executemany(updateQuery, [(lang, callback_query.message.chat.id)])
+        conn.commit()
+    with open('strings.json', encoding='utf-8') as f:
+        lang_json = json.load(f)
+    await callback_query.message.answer(lang_json[lang]['selected_language'])
+    await main_menu(callback_query.message.chat.id, callback_query.message.chat.first_name)
 
 
 @dp.callback_query_handler(lambda callback_query: True, state=Admin_privileges.user_id)

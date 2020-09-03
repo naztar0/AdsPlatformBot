@@ -10,7 +10,8 @@ class Buttons:
         'my_ads', \
         'my_promos', \
         'referrals', \
-        'top_up_balance'
+        'top_up_balance', \
+        'change_language'
     main_admin = 'admin_menu'
     back_to_menu = 'main_menu'
     back = 'back'
@@ -24,6 +25,11 @@ class Buttons:
     pay_confirm = 'confirm_pay'
     delete_ad = 'delete_ad'
     confirm_delete = 'delete_ad_confirm', 'delete_back'
+    choose_language = 'choose_language'
+    languages = \
+        Button('Русский', 'lang_ru'), \
+        Button('Українська', 'lang_ua'), \
+        Button('English', 'lang_en')
     admin = \
         Button('Привилегии', 'admin_privileges'), \
         Button('Каналы', 'admin_channels'), \
@@ -49,6 +55,6 @@ class Buttons:
     back_to_menu_but = Button('Вернуться в главное меню', 'main_menu')
     delete_ad_but = Button('Удалить объявление', 'delete_ad')
     confirm_delete_but = Button('Да, удалить', 'delete_ad_confirm'), Button('Нет, отменить', 'delete_back')
-    regexp_restart = '^(🏠 Главное меню|🏠 Головне меню)$'
+    regexp_restart = '^(🏠 Главное меню|🏠 Головне меню|🏠 Main menu)$'
     reply_request_contact = 'Поделиться контактом'
     reply_request_location = 'Поделиться местоположением'
