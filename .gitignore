@@ -3,3 +3,4 @@ settings.py
 prices.json
 strings.json
 payment server
+nohup.out
