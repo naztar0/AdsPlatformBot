@@ -54,3 +54,6 @@ class Buttons:
     regexp_restart = '^(🏠 Главное меню|🏠 Головне меню|🏠 Main menu)$'
     reply_request_contact = 'Поделиться контактом'
     reply_request_location = 'Поделиться местоположением'
+
+    chat_main = 'my_chats', 'new_chat'
+
