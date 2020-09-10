@@ -3,5 +3,5 @@ settings.py
 prices.json
 strings.json
 payment server
-export_data
+export
 nohup.out

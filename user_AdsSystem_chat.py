@@ -4,7 +4,8 @@ from database_connection import DatabaseConnection
 from buttons import Buttons
 from media_group import media_group
 from user_AdsSystem_main import _back, _delete_message, _media_group_builder, get_caption, inline_keyboard, language
-from asyncio import sleep
+import os
+import zipfile
 
 from aiogram import Bot, Dispatcher, executor, types, utils
 from aiogram.dispatcher import FSMContext
@@ -155,33 +156,127 @@ async def message_handler(message: types.Message, state: FSMContext):
     await message.answer("Чат с данным пользователем успешно создан")
 
 
-@dp.message_handler(content_types=['text', 'photo', 'video', 'location'])
+@dp.message_handler(content_types=['text', 'photo', 'video', 'location'], state=Chat.send)
 async def message_handler(message: types.Message, state: FSMContext):
-    ## НУЖНО ЗАНОСИТЬ В ЛОГ ВСЕ СООБЩЕНИЯ
-
     data = await state.get_data()
     chat = data['chat']
+    with DatabaseConnection() as db:
+        conn, cursor = db
+        selectQuery = "SELECT uid1, uid2, alias1, alias2, ID FROM chats WHERE uid1=(%s) AND uid2=(%s) OR uid1=(%s) AND uid2=(%s)"
+        cursor.executemany(selectQuery, [(message.chat.id, chat, chat, message.chat.id)])
+        res = cursor.fetchone()
+    interlocutor_chat_title = (res[2] if res[2] else res[0]) if res[0] == chat else (res[3] if res[3] else res[1])
     lang = language(message.chat.id)
-    photo = video = None
+    caption, has_media, has_media_group = '', True, False
     if message.media_group_id:
         data = await media_group(message, state)
         if data is None: return
         await state.update_data({'media_group': True})
-        caption = data['message_group'].get('caption')
+        caption = data['media_group']['caption']
         if not caption:
             caption = False
-        media = _media_group_builder(data, caption=caption)
-        await bot.send_media_group(chat, media) ## Добавить описание чата
+        else:
+            caption = await get_caption(message, caption, lang)
+            if not caption:
+                return
+        media = _media_group_builder(data, caption=f'{interlocutor_chat_title}:\n{caption}')
+        await bot.send_media_group(chat, media)
         await message.reply("Отправлено")
+        if data['media_group']['photo']:
+            has_media_group = True
     elif message.photo:
         photo = message.photo[-1].file_id
-        await bot.send_photo(chat, )
+        caption = message.caption
+        if caption:
+            caption = await get_caption(message, caption, lang)
+            if not caption:
+                return
+        await bot.send_photo(chat, photo, caption=f'{interlocutor_chat_title}:\n{caption}')
+        await message.reply("Отправлено")
     elif message.video:
         video = message.video.file_id
+        caption = message.caption
+        if caption:
+            caption = await get_caption(message, caption, lang)
+            if not caption:
+                return
+        await bot.send_video(chat, video, caption=f'{interlocutor_chat_title}:\n{caption}')
+        await message.reply("Отправлено")
+        has_media = False
+    elif message.text:
+        caption = message.text
+        if caption:
+            caption = await get_caption(message, caption, lang)
+            if not caption:
+                return
+        await bot.send_message(chat, text=f'{interlocutor_chat_title}:\n{caption}')
+        await message.reply("Отправлено")
+        has_media = False
+    elif message.location:
+        await bot.send_message(chat, text=f'{interlocutor_chat_title}:')
+        await bot.send_location(chat, message.location.latitude, message.location.longitude)
+
+    # Logging
+    with open(f'export/text/{res[4]}.txt', 'at', encoding='utf-8') as f:
+        f.write(f'{message.chat.first_name}:   {caption}\n\n')
+    if has_media:
+        first_name = str(message.chat.first_name).replace('\\', '-').replace('/', '-').replace(':', '-') \
+            .replace('*', '-').replace('?', '-').replace('"', '-').replace('<', '-').replace('>', '-').replace('|', '-')
+        if not os.path.exists(f'export/media/{res[4]}'):
+            os.mkdir(f'export/media/{res[4]}')
+        if has_media_group:
+            data = await state.get_data()
+            for photo_id in data['media_group']['photo']:
+                file_info = await bot.get_file(photo_id)
+                await file_info.download(f'export/media/{res[4]}/{first_name} - {photo_id}.jpg')
+        else:
+            fileID = message.photo[-1].file_id
+            file_info = await bot.get_file(fileID)
+            await file_info.download(f'export/media/{res[4]}/{first_name} - {fileID}.jpg')
+
+
+@dp.message_handler(content_types=['text'], state=Chat.rename)
+async def message_handler(message: types.Message, state: FSMContext):
+    title = message.text
+    if len(title) > 20:
+        await message.reply("Слишком длинное название чата, повторите попытку")
+        return
+    data = await state.get_data()
+    chat = data['chat']
+    selectQuery = "SELECT uid1, uid2, ID FROM chats WHERE uid1=(%s) AND uid2=(%s) OR uid1=(%s) AND uid2=(%s)"
+    updateQuery = "UPDATE chats SET {}=(%s) WHERE ID=(%s)"
+    with DatabaseConnection() as db:
+        conn, cursor = db
+        cursor.executemany(selectQuery, [(message.chat.id, chat, chat, message.chat.id)])
+        res = cursor.fetchone()
+        my_alias = 'alias1' if res[0] == message.chat.id else 'alias2'
+        cursor.executemany(updateQuery.format(my_alias), [(title, res[2])])
+        conn.commit()
+    await state.finish()
+    await message.answer("Успешно изменено!")
+
+
+@dp.callback_query_handler(lambda callback_query: True, state=Chat.delete)
+async def callback_inline(callback_query: types.CallbackQuery, state: FSMContext):
+    if callback_query.data == Buttons.confirm_delete[0]:
+        data = await state.get_data()
+        chat = data['chat']
+        await state.finish()
+        deleteQuery = "DELETE FROM chats WHERE uid1=(%s) AND uid2=(%s) OR uid1=(%s) AND uid2=(%s)"
+        with DatabaseConnection() as db:
+            conn, cursor = db
+            cursor.executemany(deleteQuery, [(callback_query.message.chat.id, chat, chat, callback_query.message.chat.id)])
+            conn.commit()
+        await callback_query.message.answer("Успешно удалено!")
+    elif callback_query.data == Buttons.confirm_delete[1]:
+        await state.finish()
+        await callback_query.answer("Отменено")
 
 
 
 
+
+### FUNCTION FOR TRY SEND MESSAGE
 
 if __name__ == '__main__':
     executor.start_polling(dp, skip_updates=True)
