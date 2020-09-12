@@ -626,44 +626,35 @@ async def admin_privileges(callback_query):
 async def admin_channels(callback_query, state):
     lang = language(callback_query.message.chat.id)
     data = await state.get_data()
-    selectQuery = "SELECT * FROM channels WHERE ID=(%s)"
-    countQuery = "SELECT COUNT(ID) FROM ads WHERE channel=(%s)"
-    selectChannelsQuery = "SELECT ID FROM channels"
-    last_id = data.get('channel_id')
+    selectQuery = "SELECT * FROM channels LIMIT 1 OFFSET %s"
+    countQuery = "SELECT COUNT(ID) FROM channels"
+    first = False
+    last_id = data.get('index')
+    if last_id is not None:
+        count = data['count']
+        if callback_query.data == Buttons.arrows[0].data:
+            next_id = last_id - 1
+            if next_id < 0:
+                next_id = count - 1
+        else:
+            next_id = last_id + 1
+            if next_id >= count:
+                next_id = 0
+    else:
+        next_id = 0
+        first = True
     with DatabaseConnection() as db:
         conn, cursor = db
-        if last_id:
-            last_index = data['channel_index']
-            array = data['channel_array']
-            if callback_query.data == Buttons.arrows[0].data:
-                next_index = last_index - 1
-                if next_index < 0:
-                    next_index = len(array) - 1
-            else:
-                next_index = last_index + 1
-                if len(array) <= next_index:
-                    next_index = 0
-            next_id = array[next_index]
-        else:
-            cursor.execute(selectChannelsQuery)
-            channels_ids = cursor.fetchall()
-            if not channels_ids:
-                conn.close()
-                await callback_query.answer(lang['have_not_any_channel'])
-                return
-            array = [x[0] for x in channels_ids]
-            next_index = 0
-            next_id = array[0]
         cursor.execute(selectQuery, [next_id])
         channel = cursor.fetchone()
-        cursor.execute(countQuery, [next_id])
-        count = cursor.fetchone()[0]
+        if first:
+            cursor.execute(countQuery)
+            count = cursor.fetchone()[0]
 
     text = lang['admin_channel'].format(channel[0], channel[2], channel[1], count, channel[3], channel[4], channel[5], channel[6])
     key = inline_keyboard(Buttons.admin_channels, lang['buttons'], back_data=True, arrows=True)
-    await state.update_data({'channel_index': next_index, 'channel_id': next_id})
-    if not last_id:
-        await state.update_data({'channel_array': array})
+    await state.update_data({'index': next_id, 'channel_id': channel[0], 'count': count})
+    if last_id is None:
         await Admin_channels.select.set()
         await callback_query.message.answer(text, reply_markup=key)
         await _delete_message(callback_query.message.chat.id, callback_query.message.message_id)
@@ -1028,16 +1019,14 @@ async def media_text(message: types.Message, state: FSMContext):
 async def publish_to_channel(callback_query, state):
     lang = language(callback_query.message.chat.id)
     data = await state.get_data()
-    selectBalanceQuery = "SELECT balance FROM users WHERE user_id=(%s)"
-    selectChannelQuery = "SELECT username FROM channels WHERE ID=(%s)"
+    selectQuery = "SELECT users.balance, channels.username FROM users, channels WHERE users.user_id=(%s) AND channels.ID=(%s)"
     insertQuery = "INSERT INTO ads (user_id, channel, message_id, period, expire, text) VALUES (%s, %s, %s, %s, %s, %s)"
     updateQuery = "UPDATE users SET balance=(%s) WHERE user_id=(%s)"
     with DatabaseConnection() as db:
         conn, cursor = db
-        cursor.execute(selectBalanceQuery, [callback_query.message.chat.id])
-        balance = cursor.fetchone()[0]
-        cursor.execute(selectChannelQuery, [data['channel']['ID']])
-        channel = cursor.fetchone()[0]
+        cursor.executemany(selectQuery, [(callback_query.message.chat.id, data['channel']['ID'])])
+        result = cursor.fetchone()
+    balance, channel = result
     if balance < data['price']:
         await callback_query.answer(lang['warning_not_enough_money'].format(balance=balance), show_alert=True)
         return
@@ -1097,19 +1086,17 @@ async def callback_inline(callback_query: types.CallbackQuery, state: FSMContext
             with open('prices.json', 'r') as f:
                 reward = json.load(f)['ad_view']
             existsQuery = "SELECT EXISTS (SELECT ID FROM promo_time WHERE user_id=(%s))"
+            selectQuery = "SELECT users.balance, promo.views FROM users, promo WHERE users.user_id=(%s) AND promo.ID=(%s)"
             insertQuery = "INSERT INTO promo_time (user_id, last_time) VALUES (%s, %s)"
-            updateQuery = "UPDATE promo_time SET last_time=(%s) WHERE user_id=(%s)"
-            selectViewsQuery = "SELECT views FROM promo WHERE ID=(%s)"
-            updateViewsQuery = "UPDATE promo SET views=(%s) WHERE ID=(%s)"
             insertViewedQuery = "INSERT INTO promo_viewed (user_id, promo_id) VALUES (%s, %s)"
-            selectBalanceQuery = "SELECT balance FROM users WHERE user_id=(%s)"
+            updateQuery = "UPDATE promo_time SET last_time=(%s) WHERE user_id=(%s)"
+            updateViewsQuery = "UPDATE promo SET views=(%s) WHERE ID=(%s)"
             updateBalanceQuery = "UPDATE users SET balance=(%s) WHERE user_id=(%s)"
             with DatabaseConnection() as db:
                 conn, cursor = db
-                cursor.execute(selectBalanceQuery, [callback_query.message.chat.id])
-                balance = cursor.fetchone()[0]
-                cursor.execute(selectViewsQuery, [data['promo_id']])
-                views = cursor.fetchone()[0]
+                cursor.executemany(selectQuery, [(callback_query.message.chat.id, [data['promo_id']])])
+                result = cursor.fetchone()
+                balance, views = result
                 cursor.execute(existsQuery, [callback_query.message.chat.id])
                 exists = cursor.fetchone()[0]
                 if exists:
@@ -1224,21 +1211,27 @@ async def search(message: types.Message, state: FSMContext):
     if len(keyword) > 30:
         await message.reply(lang['warning_keyword_too_long'])
         return
-    await state.update_data({'keyword': keyword, 'ad_index': 0})
     await Make_search_request.next()
 
+    searchQuery = f"SELECT channel, message_id FROM ads WHERE text LIKE '%{keyword}%' LIMIT 1 OFFSET 0"
+    selectChannelQuery = "SELECT username FROM channels WHERE ID=(%s)"
+    rows_count_query = f"SELECT COUNT(ID) FROM ads WHERE text LIKE '%{keyword}%'"
     with DatabaseConnection() as db:
         conn, cursor = db
-        searchQuery = f"SELECT channel, message_id FROM ads WHERE text LIKE '%{keyword}%'"
-        selectChannelQuery = "SELECT username FROM channels WHERE ID=(%s)"
         cursor.execute(searchQuery)
-        result = cursor.fetchall()
+        result = cursor.fetchone()
         if result:
-            cursor.execute(selectChannelQuery, [result[0][0]])
+            cursor.execute(selectChannelQuery, [result[0]])
             channel = cursor.fetchone()[0]
+            cursor.execute(rows_count_query)
+            count = cursor.fetchone()[0]
     if result:
-        await message.answer(lang['ad_link'].format(channel, result[0][1]), parse_mode="Markdown",
-                             reply_markup=inline_keyboard(Buttons.on_notifications, lang['buttons'], back_data=True, arrows=True))
+        await state.update_data({'keyword': keyword, 'ad_index': 0, 'count': count})
+        arrows = True
+        if count == 1:
+            arrows = False
+        await message.answer(lang['ad_link'].format(channel, result[1]), parse_mode="Markdown",
+                             reply_markup=inline_keyboard(Buttons.on_notifications, lang['buttons'], back_data=True, arrows=arrows))
     else:
         await message.reply(lang['search_no_results'].format(keyword=keyword), reply_markup=inline_keyboard(Buttons.on_notifications, lang['buttons'], back_data=True))
 
@@ -1253,33 +1246,32 @@ async def callback_inline(callback_query: types.CallbackQuery, state: FSMContext
         edit = data.get('edit')
         last_index = data['ad_index']
         keyword = data['keyword']
+        count = data['count']
+        if callback_query.data == Buttons.arrows[0].data:
+            if last_index == 0 or last_index > count - 1:
+                new_index = count - 1
+            else:
+                new_index = last_index - 1
+        else:
+            if last_index >= count - 1:
+                new_index = 0
+            else:
+                new_index = last_index + 1
         with DatabaseConnection() as db:
             conn, cursor = db
-            searchQuery = f"SELECT channel, message_id FROM ads WHERE text LIKE '%{keyword}%'"
+            searchQuery = f"SELECT channel, message_id FROM ads WHERE text LIKE '%{keyword}%' LIMIT 1 OFFSET %s"
             selectChannelQuery = "SELECT username FROM channels WHERE ID=(%s)"
-            cursor.execute(searchQuery)
-            result = cursor.fetchall()
+            cursor.execute(searchQuery, [new_index])
+            result = cursor.fetchone()
             if not result:
                 conn.close()
                 await callback_query.answer(lang['warning_ad_not_found'], show_alert=True)
                 return
-            length = len(result)
-            if callback_query.data == Buttons.arrows[0].data:
-                if last_index == 0 or last_index > length - 1:
-                    new_index = length - 1
-                else:
-                    new_index = last_index - 1
-            else:
-                if last_index >= length - 1:
-                    new_index = 0
-                else:
-                    new_index = last_index + 1
-
-            cursor.execute(selectChannelQuery, [result[new_index][0]])
+            cursor.execute(selectChannelQuery, [result[0]])
             channel = cursor.fetchone()[0]
 
         await state.update_data({'ad_index': new_index, 'edit': True})
-        text = lang['ad_link'].format(channel, result[new_index][1])
+        text = lang['ad_link'].format(channel, result[1])
         if edit:
             try:
                 await bot.edit_message_text(text, callback_query.message.chat.id, callback_query.message.message_id,
@@ -1461,7 +1453,7 @@ async def search(message: types.Message, state: FSMContext):
         if result[3]:
             privileges += lang['admin_privileges_list'][4]
         if not privileges:
-            privileges = lang['admin_privileges_list'][1]
+            privileges = lang['admin_privileges_list'][0]
     await Admin_privileges.next()
     await state.update_data({'priv_id': forward.id, 'priv_name': forward.first_name})
     await message.answer(lang['admin_privileges'].format(db_id[0], forward.first_name, forward.username, privileges),

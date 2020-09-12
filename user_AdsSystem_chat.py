@@ -35,6 +35,16 @@ async def main_menu(user_id, lang=None):
     await bot.send_message(user_id, lang['main_menu'], reply_markup=inline_keyboard(Buttons.chat_main, lang))
 
 
+async def _send_message(func, *args):
+    try:
+        await func(*args)
+    except utils.exceptions.BotBlocked: return
+    except utils.exceptions.UserDeactivated: return
+    except utils.exceptions.ChatNotFound: return
+    except utils.exceptions.BadRequest: return
+    return True
+
+
 @dp.message_handler(commands=['start'])
 async def message_handler(message: types.Message):
     lang = language(message.chat.id, registration_important=True)
@@ -167,7 +177,7 @@ async def message_handler(message: types.Message, state: FSMContext):
         res = cursor.fetchone()
     interlocutor_chat_title = (res[2] if res[2] else res[0]) if res[0] == chat else (res[3] if res[3] else res[1])
     lang = language(message.chat.id)
-    caption, has_media, has_media_group = '', True, False
+    caption, has_media, has_media_group = '', False, False
     if message.media_group_id:
         data = await media_group(message, state)
         if data is None: return
@@ -180,9 +190,13 @@ async def message_handler(message: types.Message, state: FSMContext):
             if not caption:
                 return
         media = _media_group_builder(data, caption=f'{interlocutor_chat_title}:\n{caption}')
-        await bot.send_media_group(chat, media)
-        await message.reply("Отправлено")
+        send = await _send_message(bot.send_media_group, chat, media)
+        if send:
+            await message.reply("Отправлено")
+        else:
+            await message.reply("Сообщение не доставлено, возможно пользователь заблокировал бота")
         if data['media_group']['photo']:
+            has_media = True
             has_media_group = True
     elif message.photo:
         photo = message.photo[-1].file_id
@@ -191,8 +205,12 @@ async def message_handler(message: types.Message, state: FSMContext):
             caption = await get_caption(message, caption, lang)
             if not caption:
                 return
-        await bot.send_photo(chat, photo, caption=f'{interlocutor_chat_title}:\n{caption}')
-        await message.reply("Отправлено")
+        send = await _send_message(bot.send_photo, chat, photo, f'{interlocutor_chat_title}:\n{caption}')
+        if send:
+            await message.reply("Отправлено")
+        else:
+            await message.reply("Сообщение не доставлено, возможно пользователь заблокировал бота")
+        has_media = True
     elif message.video:
         video = message.video.file_id
         caption = message.caption
@@ -200,21 +218,29 @@ async def message_handler(message: types.Message, state: FSMContext):
             caption = await get_caption(message, caption, lang)
             if not caption:
                 return
-        await bot.send_video(chat, video, caption=f'{interlocutor_chat_title}:\n{caption}')
-        await message.reply("Отправлено")
-        has_media = False
+        send = await _send_message(bot.send_video, chat, video, None, None, None, None, f'{interlocutor_chat_title}:\n{caption}')
+        if send:
+            await message.reply("Отправлено")
+        else:
+            await message.reply("Сообщение не доставлено, возможно пользователь заблокировал бота")
     elif message.text:
         caption = message.text
         if caption:
             caption = await get_caption(message, caption, lang)
             if not caption:
                 return
-        await bot.send_message(chat, text=f'{interlocutor_chat_title}:\n{caption}')
-        await message.reply("Отправлено")
-        has_media = False
+        send = await _send_message(bot.send_message, chat, f'{interlocutor_chat_title}:\n{caption}')
+        if send:
+            await message.reply("Отправлено")
+        else:
+            await message.reply("Сообщение не доставлено, возможно пользователь заблокировал бота")
     elif message.location:
-        await bot.send_message(chat, text=f'{interlocutor_chat_title}:')
-        await bot.send_location(chat, message.location.latitude, message.location.longitude)
+        await _send_message(bot.send_message, chat, f'{interlocutor_chat_title}:')
+        send = await _send_message(bot.send_location, chat, message.location.latitude, message.location.longitude)
+        if send:
+            await message.reply("Отправлено")
+        else:
+            await message.reply("Сообщение не доставлено, возможно пользователь заблокировал бота")
 
     # Logging
     with open(f'export/text/{res[4]}.txt', 'at', encoding='utf-8') as f:
