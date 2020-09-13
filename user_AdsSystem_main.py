@@ -1353,8 +1353,9 @@ async def callback_inline(callback_query: types.CallbackQuery, state: FSMContext
         except utils.exceptions.MessageToDeleteNotFound: pass
         except utils.exceptions.MessageCantBeDeleted:
             for admin in admins:
+                lang = language(admin[0])
                 await bot.forward_message(admin[0], data['channel'], data['message_id'])
-                await bot.send_message(admin[0], "Please, delete this announcement manually")
+                await bot.send_message(admin[0], lang['delete_ad_manually'])
                 await sleep(.1)
             await callback_query.answer(lang['will_be_deleted_soon'], show_alert=True)
         await main_menu(callback_query.message.chat.id, callback_query.message.chat.first_name)
