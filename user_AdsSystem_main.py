@@ -791,20 +791,22 @@ async def report_send(callback_query):
     await callback_query.answer("Жалоба на объявление отправлена", show_alert=True)
     if admins:
         key = types.InlineKeyboardMarkup()
-        but_1 = types.InlineKeyboardButton('Удалить', callback_data=f'delRep_{channel}_{callback_query.message.chat.id}_{message_id}')
-        but_2 = types.InlineKeyboardButton('Оставить', callback_data='delRep')
+        but_1 = types.InlineKeyboardButton('❌🗑 Delete', callback_data=f'delRep_{channel}_{callback_query.message.chat.id}_{message_id}')
+        but_2 = types.InlineKeyboardButton('✅ Keep', callback_data='delRep')
         key.add(but_1, but_2)
         for admin in admins:
+            lang2 = language(admin[0])
             await bot.forward_message(admin[0], callback_query.message.chat.id, message_id)
-            await bot.send_message(admin[0], "Поступило большое количество жалоб на данное объявление", reply_markup=key)
+            await bot.send_message(admin[0], lang2['reports_got'], reply_markup=key)
             await sleep(.1)
 
 
 async def admin_delete_message(callback_query):
+    lang = language(callback_query.message.chat.id)
     data = str(callback_query.data).split('_')
     if len(data) == 1:
         await _delete_message(callback_query.message.chat.id, callback_query.message.message_id)
-        await callback_query.answer('Оставлено')
+        await callback_query.answer(lang['kept'])
         return
     channel, channel_id, message_id = data[1], int(data[2]), int(data[3])
     success = False
@@ -812,9 +814,10 @@ async def admin_delete_message(callback_query):
         await bot.delete_message(channel_id, message_id)
         success = True
     except utils.exceptions.MessageCantBeDeleted:
-        await callback_query.answer("Я не могу удалить это объявление, удалите вручную", show_alert=True)
+        await callback_query.answer(lang['warning_can_not_delete_ad'], show_alert=True)
     except utils.exceptions.MessageToDeleteNotFound:
-        await callback_query.answer("Это объявление уже было удалено")
+        await callback_query.answer(lang['warning_ad_already_deleted'])
+        await _delete_message(callback_query.message.chat.id, callback_query.message.message_id)
     with DatabaseConnection() as db:
         conn, cursor = db
         deleteQuery = "DELETE FROM ads WHERE channel=(%s) AND message_id=(%s)"
@@ -822,7 +825,7 @@ async def admin_delete_message(callback_query):
         conn.commit()
     if success:
         await _delete_message(callback_query.message.chat.id, callback_query.message.message_id)
-        await callback_query.answer("Успешно удалено!")
+        await callback_query.answer(lang['deleted'])
 
 
 
@@ -1519,7 +1522,7 @@ async def callback_inline(callback_query: types.CallbackQuery, state: FSMContext
         cursor.execute(updateQuery, [data['priv_id']])
         conn.commit()
     await state.finish()
-    await callback_query.answer("Привилегии успешно изменены", show_alert=True)
+    await callback_query.answer("Привилегии успешно изменены", show_alert=True) ##
     await admin_menu(callback_query, callback_query.message.message_id)
 
 
