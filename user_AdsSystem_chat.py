@@ -165,7 +165,6 @@ async def chat_answer(callback_query, state):
     await callback_query.message.answer(lang['send_message_to_interlocutor'])
 
 
-
 @dp.callback_query_handler(lambda callback_query: True)
 async def callback_inline(callback_query: types.CallbackQuery, state: FSMContext):
     if callback_query.data == Buttons.back:
@@ -264,14 +263,11 @@ async def message_handler(message: types.Message, state: FSMContext):
                                            'video': data['media_group']['video'],
                                            'caption': data['media_group']['caption']}})
         data = await state.get_data()
-        caption = data['media']['caption']
+        data['media']['caption'] = f'{interlocutor_chat_title}:\n{caption}' if caption else interlocutor_chat_title
+        caption = await get_caption(message, caption, lang)
         if not caption:
-            caption = False
-        else:
-            caption = await get_caption(message, caption, lang)
-            if not caption:
-                return
-        media = _media_group_builder(data, caption=f'{interlocutor_chat_title}:\n{caption}' if caption else interlocutor_chat_title)
+            return
+        media = _media_group_builder(data, caption=True)
         send = await _send_message(bot.send_media_group, chat_id=chat, media=media)
         if send:
             await message.answer(lang['sent'])
@@ -282,13 +278,12 @@ async def message_handler(message: types.Message, state: FSMContext):
             has_media_group = True
     elif message.photo:
         photo = message.photo[-1].file_id
-        caption = message.caption
-        if caption:
-            caption = await get_caption(message, caption, lang)
-            if not caption:
-                return
+        caption = f'{interlocutor_chat_title}:\n{message.caption}' if message.caption else interlocutor_chat_title
+        caption = await get_caption(message, caption, lang)
+        if not caption:
+            return
         send = await _send_message(bot.send_photo, chat_id=chat, photo=photo,
-                                   caption=f'{interlocutor_chat_title}:\n{caption}' if caption else interlocutor_chat_title, reply_markup=key)
+                                   caption=caption, reply_markup=key)
         if send:
             await message.answer(lang['sent'])
         else:
@@ -296,23 +291,21 @@ async def message_handler(message: types.Message, state: FSMContext):
         has_media = True
     elif message.video:
         video = message.video.file_id
-        caption = message.caption
-        if caption:
-            caption = await get_caption(message, caption, lang)
-            if not caption:
-                return
+        caption = f'{interlocutor_chat_title}:\n{message.caption}' if message.caption else interlocutor_chat_title
+        caption = await get_caption(message, caption, lang)
+        if not caption:
+            return
         send = await _send_message(bot.send_video, chat_id=chat, video=video,
-                                   caption=f'{interlocutor_chat_title}:\n{caption}' if caption else interlocutor_chat_title, reply_markup=key)
+                                   caption=caption, reply_markup=key)
         if send:
             await message.reply(lang['sent'])
         else:
             await message.reply(lang['warning_not_sent'])
     elif message.text:
-        caption = message.text
-        if caption:
-            caption = await get_caption(message, caption, lang)
-            if not caption:
-                return
+        caption = f'{interlocutor_chat_title}:\n{message.text}'
+        caption = await get_caption(message, caption, lang)
+        if not caption:
+            return
         send = await _send_message(bot.send_message, chat_id=chat,
                                    text=f'{interlocutor_chat_title}:\n{caption}', reply_markup=key)
         if send:
@@ -413,8 +406,6 @@ async def message_handler(message: types.Message, state: FSMContext):
     if not exists:
         lang = language(message.chat.id)
         await message.answer(lang['warning_chat_not_exist'])
-
-
 
 
 if __name__ == '__main__':

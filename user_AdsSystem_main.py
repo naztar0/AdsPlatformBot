@@ -212,6 +212,8 @@ def language(user_id, registration_important=False):
 
     def strings():
         lang = get_lang()
+        if not lang and registration_important:
+            return
         with open('strings.json', encoding='utf-8') as f:
             data = json.load(f)[lang]
         return data
@@ -328,11 +330,11 @@ async def check_search_requests(text, message_id, channel):
         results = cursor.fetchall()
     for result in results:
         keyword = str(result[1]).replace('_', '\\_').replace('*', '\\*').replace('`', '\\`').replace('[', '\\[')
-        if result[1] in text:
+        if result[1].lower() in text.lower():
             try:
                 lang = language(result[0])
                 await bot.send_message(result[0], lang['new_ad_notification'].format(channel[1:], message_id, keyword), parse_mode="Markdown")
-                await sleep(.1)
+                await sleep(.2)
             except utils.exceptions.BotBlocked: pass
             except utils.exceptions.UserDeactivated: pass
             except utils.exceptions.ChatNotFound: pass
@@ -750,7 +752,7 @@ async def admin_ads(callback_query):
 
 
 async def report_send(callback_query):
-    lang = language(callback_query.message.chat.id)
+    # lang = language(callback_query.message.chat.id)
     message_id = callback_query.message.message_id
     selectChannelQuery = "SELECT ID FROM channels WHERE username=(%s)"
     selectExistsUserQuery = "SELECT EXISTS (SELECT ID FROM reports WHERE channel=(%s) AND message_id=(%s) AND user_id=(%s))"
@@ -798,7 +800,7 @@ async def report_send(callback_query):
             lang2 = language(admin[0])
             await bot.forward_message(admin[0], callback_query.message.chat.id, message_id)
             await bot.send_message(admin[0], lang2['reports_got'], reply_markup=key)
-            await sleep(.1)
+            await sleep(.2)
 
 
 async def admin_delete_message(callback_query):
@@ -828,8 +830,7 @@ async def admin_delete_message(callback_query):
         await callback_query.answer(lang['deleted'])
 
 
-
-
+# MAIN CALLBACK QUERY HANDLER, ALSO MAIN FUNCTIONS HANDLER
 @dp.callback_query_handler(lambda callback_query: True)
 async def callback_inline(callback_query: types.CallbackQuery, state: FSMContext):
     callback_query_data = callback_query.data
@@ -884,9 +885,6 @@ async def callback_inline(callback_query: types.CallbackQuery, state: FSMContext
         await edit_ad(callback_query, state)
     elif callback_query_data[:5] == 'delAd':
         await delete_ad(callback_query, state)
-
-
-
 
 
 async def channels_choose(callback_query, state):
@@ -1022,14 +1020,16 @@ async def media_text(message: types.Message, state: FSMContext):
 async def publish_to_channel(callback_query, state):
     lang = language(callback_query.message.chat.id)
     data = await state.get_data()
-    selectQuery = "SELECT users.balance, channels.username FROM users, channels WHERE users.user_id=(%s) AND channels.ID=(%s)"
+    selectBalanceQuery = "SELECT balance FROM users WHERE user_id=(%s)"
+    selectChannelQuery = "SELECT username FROM channels WHERE ID=(%s)"
     insertQuery = "INSERT INTO ads (user_id, channel, message_id, period, expire, text) VALUES (%s, %s, %s, %s, %s, %s)"
     updateQuery = "UPDATE users SET balance=(%s) WHERE user_id=(%s)"
     with DatabaseConnection() as db:
         conn, cursor = db
-        cursor.executemany(selectQuery, [(callback_query.message.chat.id, data['channel']['ID'])])
-        result = cursor.fetchone()
-    balance, channel = result
+        cursor.execute(selectBalanceQuery, [callback_query.message.chat.id])
+        balance = cursor.fetchone()[0]
+        cursor.execute(selectChannelQuery, [data['channel']['ID']])
+        channel = cursor.fetchone()[0]
     if balance < data['price']:
         await callback_query.answer(lang['warning_not_enough_money'].format(balance=balance), show_alert=True)
         return
@@ -1089,17 +1089,19 @@ async def callback_inline(callback_query: types.CallbackQuery, state: FSMContext
             with open('prices.json', 'r') as f:
                 reward = json.load(f)['ad_view']
             existsQuery = "SELECT EXISTS (SELECT ID FROM promo_time WHERE user_id=(%s))"
-            selectQuery = "SELECT users.balance, promo.views FROM users, promo WHERE users.user_id=(%s) AND promo.ID=(%s)"
             insertQuery = "INSERT INTO promo_time (user_id, last_time) VALUES (%s, %s)"
-            insertViewedQuery = "INSERT INTO promo_viewed (user_id, promo_id) VALUES (%s, %s)"
             updateQuery = "UPDATE promo_time SET last_time=(%s) WHERE user_id=(%s)"
+            selectViewsQuery = "SELECT views FROM promo WHERE ID=(%s)"
             updateViewsQuery = "UPDATE promo SET views=(%s) WHERE ID=(%s)"
+            insertViewedQuery = "INSERT INTO promo_viewed (user_id, promo_id) VALUES (%s, %s)"
+            selectBalanceQuery = "SELECT balance FROM users WHERE user_id=(%s)"
             updateBalanceQuery = "UPDATE users SET balance=(%s) WHERE user_id=(%s)"
             with DatabaseConnection() as db:
                 conn, cursor = db
-                cursor.executemany(selectQuery, [(callback_query.message.chat.id, [data['promo_id']])])
-                result = cursor.fetchone()
-                balance, views = result
+                cursor.execute(selectBalanceQuery, [callback_query.message.chat.id])
+                balance = cursor.fetchone()[0]
+                cursor.execute(selectViewsQuery, [data['promo_id']])
+                views = cursor.fetchone()[0]
                 cursor.execute(existsQuery, [callback_query.message.chat.id])
                 exists = cursor.fetchone()[0]
                 if exists:
@@ -1359,7 +1361,7 @@ async def callback_inline(callback_query: types.CallbackQuery, state: FSMContext
                 lang = language(admin[0])
                 await bot.forward_message(admin[0], data['channel'], data['message_id'])
                 await bot.send_message(admin[0], lang['delete_ad_manually'])
-                await sleep(.1)
+                await sleep(.2)
             await callback_query.answer(lang['will_be_deleted_soon'], show_alert=True)
         await main_menu(callback_query.message.chat.id, callback_query.message.chat.first_name)
     elif callback_query.data == Buttons.confirm_delete[1]:
@@ -1400,11 +1402,11 @@ async def callback_inline(callback_query: types.CallbackQuery, state: FSMContext
         return
     await state.finish()
     updateQuery = "UPDATE users SET lang=(%s) WHERE user_id=(%s)"
-    lang = 'ru'
+    lang = 'ua'
     if callback_query.data == Buttons.languages[0].data:
-        lang = 'ru'
-    elif callback_query.data == Buttons.languages[1].data:
         lang = 'ua'
+    elif callback_query.data == Buttons.languages[1].data:
+        lang = 'ru'
     elif callback_query.data == Buttons.languages[2].data:
         lang = 'en'
     with DatabaseConnection() as db:
@@ -1522,7 +1524,8 @@ async def callback_inline(callback_query: types.CallbackQuery, state: FSMContext
         cursor.execute(updateQuery, [data['priv_id']])
         conn.commit()
     await state.finish()
-    await callback_query.answer("Привилегии успешно изменены", show_alert=True) ##
+    lang = language(callback_query.message.chat.id)
+    await callback_query.answer(lang['edited_priv'], show_alert=True)
     await admin_menu(callback_query, callback_query.message.message_id)
 
 
@@ -1768,10 +1771,6 @@ async def callback_inline(callback_query: types.CallbackQuery, state: FSMContext
     elif callback_query.data == Buttons.confirm_delete[1]:
         await callback_query.answer(lang['canceled'])
         await admin_menu(callback_query, callback_query.message.message_id)
-
-
-
-
 
 
 if __name__ == "__main__":

@@ -47,7 +47,7 @@ async def loop_check():
                         lang = json.load(f)[la]
                     try:
                         await bot.send_message(admin[0], lang['expired_ad_delete_request'].format(usernames[channel], message_id), parse_mode="Markdown")
-                        await sleep(.05)
+                        await sleep(.2)
                     except utils.exceptions.BotBlocked: pass
                     except utils.exceptions.UserDeactivated: pass
                     except utils.exceptions.ChatNotFound: pass
