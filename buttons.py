@@ -51,9 +51,13 @@ class Buttons:
         Button('English', 'lang_en')
     report = Button('Жалоба', 'report')
     arrows = Button('⬅', 'prev'), Button('➡', 'next')
+
     regexp_restart = '^(🏠 Главное меню|🏠 Головне меню|🏠 Main menu)$'
+    regexp_restart_start = '^(🏠 Главное меню|🏠 Головне меню|🏠 Main menu|/start)$'
     reply_request_contact = 'Поделиться контактом'
     reply_request_location = 'Поделиться местоположением'
+
+    start_private_chat = 'Написать | Send message'
 
     chat_main = 'my_chats', 'new_chat'
 

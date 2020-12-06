@@ -5,9 +5,8 @@ from buttons import Buttons
 from media_group import media_group
 from user_AdsSystem_main import _back, _media_group_builder, get_caption, inline_keyboard, language
 import os
-import zipfile
-import time
 import datetime
+from asyncio import sleep
 
 from aiogram import Bot, Dispatcher, executor, types, utils
 from aiogram.dispatcher import FSMContext
@@ -41,28 +40,44 @@ async def restart(message: types.Message, state: FSMContext):
     await main_menu(message.chat.id)
 
 
-@dp.message_handler(regexp=Buttons.regexp_restart, state=Chat)
+@dp.message_handler(regexp=Buttons.regexp_restart_start, state=Chat)
 async def restart(message: types.Message, state: FSMContext):
     await state.finish()
     await main_menu(message.chat.id)
 
 
-@dp.message_handler(regexp=Buttons.regexp_restart, state=New_chat)
+@dp.message_handler(regexp=Buttons.regexp_restart_start, state=New_chat)
 async def restart(message: types.Message, state: FSMContext):
     await state.finish()
     await main_menu(message.chat.id)
 
 
-@dp.message_handler(regexp=Buttons.regexp_restart, state=Export)
+@dp.message_handler(regexp=Buttons.regexp_restart_start, state=Export)
 async def restart(message: types.Message, state: FSMContext):
     await state.finish()
     await main_menu(message.chat.id)
 
 
-async def main_menu(user_id, lang=None):
+def save_data(path, name: str = None, text: str = None, data_type: str = None, data: str = None):
+    if text:
+        with open(f'export/text/{path}.txt', 'a', encoding='utf-8') as f:
+            f.write(f'{datetime.datetime.strftime(datetime.datetime.now(), "%d.%m / %H:%M")} - '
+                    f'{name}:\n{text}\n\n')
+    if data:
+        with open(f'export/media/{path}.txt', 'a', encoding='utf-8') as f:
+            f.write(f'{data_type}/{data}\n')
+
+
+async def main_menu(user_id, lang=None, message=None):
     if not lang:
         lang = language(user_id)
-    await bot.send_message(user_id, lang['main_menu'], reply_markup=inline_keyboard(Buttons.chat_main, lang))
+    if message:
+        if 'nc' in message.text:
+            new_chat_user_id = message.text[9:]
+            if new_chat_user_id.isdigit():
+                await new_chat_get_code(message, int(new_chat_user_id))
+    else:
+        await bot.send_message(user_id, lang['main_menu'], reply_markup=inline_keyboard(Buttons.chat_main, lang))
 
 
 async def _send_message(func, **kwargs):
@@ -92,8 +107,8 @@ async def message_handler(message: types.Message):
         return
     key = types.ReplyKeyboardMarkup(resize_keyboard=True)
     key.add(types.KeyboardButton(lang['buttons']['reply_restart']))
-    await message.answer("Hello!", reply_markup=key)
-    await main_menu(message.chat.id, lang)
+    await message.answer("👋", reply_markup=key)
+    await main_menu(message.chat.id, lang, message)
 
 
 @dp.message_handler(commands=['export'])
@@ -160,7 +175,7 @@ async def new_chat(callback_query):
 async def chat_answer(callback_query, state):
     lang = language(callback_query.message.chat.id)
     await Chat.send.set()
-    await state.update_data({'chat': str(callback_query.data)[6:]})
+    await state.update_data({'chat': int(callback_query.data[6:])})
     await callback_query.answer()
     await callback_query.message.answer(lang['send_message_to_interlocutor'])
 
@@ -202,12 +217,11 @@ async def callback_inline(callback_query: types.CallbackQuery, state: FSMContext
         await _delete_message(callback_query.message.chat.id, callback_query.message.message_id)
 
 
-@dp.message_handler(regexp='^\\d+$', state=New_chat.chat)
-async def message_handler(message: types.Message, state: FSMContext):
+async def new_chat_get_code(message, chat=None):
     lang = language(message.chat.id)
-    chat = int(message.text)
+    if not chat:
+        chat = int(message.text)
     if chat == message.chat.id:
-        await state.finish()
         await message.reply(lang['warning_chat_with_yourself'])
         return
     existsQuery1 = "SELECT EXISTS (SELECT ID FROM users WHERE user_id=(%s))"
@@ -219,11 +233,9 @@ async def message_handler(message: types.Message, state: FSMContext):
         cursor.executemany(existsQuery2, [(message.chat.id, chat, chat, message.chat.id)])
         result2 = cursor.fetchone()[0]
     if not result1:
-        await state.finish()
         await message.reply(lang['warning_no_user_in_db'])
         return
     elif result2:
-        await state.finish()
         await message.reply(lang['warning_chat_already_exists'])
         return
     insertQuery = "INSERT INTO chats (uid1, uid2) VALUES (%s, %s)"
@@ -236,9 +248,15 @@ async def message_handler(message: types.Message, state: FSMContext):
         selectQuery = "SELECT `AUTO_INCREMENT` FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA = (%s) AND TABLE_NAME = 'chats'"
         cursor.execute(selectQuery, [c.db])
         ID = cursor.fetchone()[0] - 1
-    await message.answer(lang['chat_created'].format(ID))
+    await message.answer(lang['chat_created'].format(ID, chat))
     lang2 = language(chat)
-    await _send_message(bot.send_message, chat_id=chat, text=lang2['chat_created_2'].format(ID))
+    await _send_message(bot.send_message, chat_id=chat, text=lang2['chat_created_2'].format(ID, message.chat.id))
+
+
+@dp.message_handler(regexp='^\\d+$', state=New_chat.chat)
+async def message_handler(message: types.Message, state: FSMContext):
+    await state.finish()
+    await new_chat_get_code(message)
 
 
 @dp.message_handler(content_types=['text', 'photo', 'video', 'location'], state=Chat.send)
@@ -250,11 +268,15 @@ async def message_handler(message: types.Message, state: FSMContext):
         selectQuery = "SELECT uid1, uid2, alias1, alias2, ID FROM chats WHERE (uid1=(%s) AND uid2=(%s) OR uid1=(%s) AND uid2=(%s)) AND active=1"
         cursor.executemany(selectQuery, [(message.chat.id, chat, chat, message.chat.id)])
         res = cursor.fetchone()
-    interlocutor_chat_title = (res[3] if res[3] else res[0]) if res[0] == chat else (res[2] if res[2] else res[1])
+    interlocutor_chat_title = (res[3] if res[3] else res[0]) if res[1] == chat else (res[2] if res[2] else res[1])
     lang = language(message.chat.id)
-    caption, has_media, has_media_group = '', False, False
-    key = types.InlineKeyboardMarkup()
-    key.add(types.InlineKeyboardButton(lang['answer'], callback_data=f"answer{message.chat.id}"))
+    name = f'@{message.chat.username}' if message.chat.username else message.chat.id
+    key = None
+    state_interlocutor = await state.storage.get_data(chat=chat)
+    interlocutor_in_chat = state_interlocutor.get('chat')
+    if str(interlocutor_in_chat) != str(message.chat.id):
+        key = types.InlineKeyboardMarkup()
+        key.add(types.InlineKeyboardButton(lang['answer'], callback_data=f"answer{message.chat.id}"))
     if message.media_group_id:
         data = await media_group(message, state)
         if data is None: return
@@ -263,8 +285,8 @@ async def message_handler(message: types.Message, state: FSMContext):
                                            'video': data['media_group']['video'],
                                            'caption': data['media_group']['caption']}})
         data = await state.get_data()
-        data['media']['caption'] = f'{interlocutor_chat_title}:\n{caption}' if caption else interlocutor_chat_title
-        caption = await get_caption(message, caption, lang)
+        data['media']['caption'] = f"{interlocutor_chat_title}:\n{data['media']['caption']}" if data['media']['caption'] else interlocutor_chat_title
+        caption = await get_caption(message, data['media']['caption'], lang)
         if not caption:
             return
         media = _media_group_builder(data, caption=True)
@@ -273,9 +295,14 @@ async def message_handler(message: types.Message, state: FSMContext):
             await message.answer(lang['sent'])
         else:
             await message.reply(lang['warning_not_sent'])
-        if data['media']['photo']:
-            has_media = True
-            has_media_group = True
+        photo = data['media']['photo']
+        video = data['media']['video']
+        text = data['media']['caption']
+
+        for p in photo:
+            save_data(res[4], name, text, 'photo', p)
+        for v in video:
+            save_data(res[4], name, text, 'video', v)
     elif message.photo:
         photo = message.photo[-1].file_id
         caption = f'{interlocutor_chat_title}:\n{message.caption}' if message.caption else interlocutor_chat_title
@@ -288,7 +315,7 @@ async def message_handler(message: types.Message, state: FSMContext):
             await message.answer(lang['sent'])
         else:
             await message.reply(lang['warning_not_sent'])
-        has_media = True
+        save_data(res[4], name, caption, 'photo', photo)
     elif message.video:
         video = message.video.file_id
         caption = f'{interlocutor_chat_title}:\n{message.caption}' if message.caption else interlocutor_chat_title
@@ -301,17 +328,19 @@ async def message_handler(message: types.Message, state: FSMContext):
             await message.reply(lang['sent'])
         else:
             await message.reply(lang['warning_not_sent'])
+        save_data(res[4], name, caption, 'video', video)
     elif message.text:
         caption = f'{interlocutor_chat_title}:\n{message.text}'
         caption = await get_caption(message, caption, lang)
         if not caption:
             return
         send = await _send_message(bot.send_message, chat_id=chat,
-                                   text=f'{interlocutor_chat_title}:\n{caption}', reply_markup=key)
+                                   text=caption, reply_markup=key)
         if send:
             await message.answer(lang['sent'])
         else:
             await message.reply(lang['warning_not_sent'])
+        save_data(res[4], name, caption)
     elif message.location:
         await _send_message(bot.send_message, chat_id=chat, text=f'{interlocutor_chat_title}:')
         send = await _send_message(bot.send_location, chat_id=chat, latitude=message.location.latitude,
@@ -320,27 +349,6 @@ async def message_handler(message: types.Message, state: FSMContext):
             await message.answer(lang['sent'])
         else:
             await message.reply(lang['warning_not_sent'])
-
-    # Logging
-    if caption:
-        with open(f'export/text/{res[4]}.txt', 'at', encoding='utf-8') as f:
-            f.write(f'{datetime.datetime.strftime(datetime.datetime.now(), "%d.%m / %H:%M")} - '
-                    f'{message.chat.first_name}:\n{caption}\n\n')
-    if has_media:
-        first_name = str(message.chat.first_name).replace('\\', '-').replace('/', '-').replace(':', '-') \
-            .replace('*', '-').replace('?', '-').replace('"', '-').replace('<', '-').replace('>', '-').replace('|', '-')
-        if not os.path.exists(f'export/media/{res[4]}'):
-            os.mkdir(f'export/media/{res[4]}')
-        if has_media_group:
-            data = await state.get_data()
-            for i, photo_id in enumerate(data['media']['photo']):
-                file_info = await bot.get_file(photo_id)
-                await file_info.download(f'export/media/{res[4]}/{first_name} ({int(time.time())}{i}).jpg')
-        else:
-            fileID = message.photo[-1].file_id
-            file_info = await bot.get_file(fileID)
-            await file_info.download(f'export/media/{res[4]}/{first_name} ({int(time.time())}0).jpg')
-    await state.finish()
 
 
 @dp.message_handler(content_types=['text'], state=Chat.rename)
@@ -387,25 +395,35 @@ async def callback_inline(callback_query: types.CallbackQuery, state: FSMContext
 
 @dp.message_handler(regexp='^\\d+$', state=Export.chat)
 async def message_handler(message: types.Message, state: FSMContext):
+    lang = language(message.chat.id)
     await state.finish()
-    chat_id = message.text
-    exists = False
-    if os.path.exists(f'export/text/{chat_id}.txt'):
-        await bot.send_document(message.chat.id, types.InputFile(f'export/text/{chat_id}.txt', f'{chat_id}.txt'))
-        exists = True
-    if os.path.exists(f'export/media/{chat_id}'):
-        await bot.send_chat_action(message.chat.id, types.ChatActions.UPLOAD_DOCUMENT)
-        z = zipfile.ZipFile(f'{chat_id}.zip', 'w')
-        for root, dirs, files in os.walk(f'export/media/{chat_id}'):
-            for file in files:
-                z.write(os.path.join(root, file), file)
-        z.close()
-        await bot.send_document(message.chat.id, types.InputFile(f'{chat_id}.zip', f'{chat_id} media.zip'))
-        os.remove(f'{chat_id}.zip')
-        exists = True
-    if not exists:
-        lang = language(message.chat.id)
+    code = message.text
+    if not os.path.exists(f'export/text/{code}.txt'):
         await message.answer(lang['warning_chat_not_exist'])
+        return
+    try:
+        await bot.send_document(message.chat.id,
+                                types.InputFile(f'export/text/{code}.txt', f'{code} text messages.txt'))
+    except FileNotFoundError:
+        await message.answer(lang['warning_chat_has_not_text'])
+    await sleep(.05)
+    try:
+        with open(f'export/media/{code}.txt', 'r') as f:
+            data = f.readlines()
+        for file in data:
+            filetype, fileid = file[:-1].split('/')
+            try:
+                if filetype == 'photo':
+                    await bot.send_photo(message.chat.id, fileid)
+                elif filetype == 'video':
+                    await bot.send_video(message.chat.id, fileid)
+                elif filetype == 'document':
+                    await bot.send_document(message.chat.id, fileid)
+            except Exception as e:
+                await message.answer(str(e))
+            await sleep(.05)
+    except FileNotFoundError:
+        await message.answer(lang['warning_chat_has_not_media'])
 
 
 if __name__ == '__main__':

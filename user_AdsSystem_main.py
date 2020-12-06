@@ -1035,7 +1035,8 @@ async def publish_to_channel(callback_query, state):
         return
 
     key = types.InlineKeyboardMarkup()
-    key.add(types.InlineKeyboardButton(Buttons.report.title, callback_data=Buttons.report.data))
+    #key.add(types.InlineKeyboardButton(Buttons.report.title, callback_data=Buttons.report.data))
+    key.add(types.InlineKeyboardButton(Buttons.start_private_chat, url=f'https://t.me/Advanced_Chat_Bot?start=nc{callback_query.message.chat.id}'))
     channel = f'@{channel}'
     if data.get('media_group'):
         media = _media_group_builder(data, caption=True)
